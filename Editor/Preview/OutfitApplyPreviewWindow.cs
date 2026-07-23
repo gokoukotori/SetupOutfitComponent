@@ -11,6 +11,9 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
 {
     internal sealed class OutfitApplyPreviewWindow : SceneView
     {
+        internal static readonly Quaternion FrontViewRotation =
+            Quaternion.Euler(0f, 180f, 0f);
+
         private static OutfitApplyPreviewWindow _activeWindow;
 
         private OutfitSetupWindow _owner;
@@ -249,7 +252,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             var bounds = CalculatePreviewBounds(_request.AvatarRoot, _mirror);
             pivot = bounds.center;
             size = Mathf.Max(bounds.extents.magnitude, 0.5f);
-            if (resetRotation) rotation = Quaternion.identity;
+            if (resetRotation) rotation = FrontViewRotation;
             Repaint();
         }
 
