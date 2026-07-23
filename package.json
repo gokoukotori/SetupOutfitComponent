@@ -16,7 +16,7 @@
     "name": "Gokoukotori"
   },
   "dependencies": {
-    "com.vrchat.avatars": "3.10.4",
-    "nadena.dev.modular-avatar": "1.18.0-beta.1"
+    "com.vrchat.avatars": ">=3.10.4",
+    "nadena.dev.modular-avatar": ">=1.18.0-beta.1"
   }
 }
