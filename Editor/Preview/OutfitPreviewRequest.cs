@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
 using UnityEditor;
 using UnityEditor.SceneManagement;
@@ -7,6 +8,95 @@ using UnityEngine;
 
 namespace Gokoukotori.SetupOutfitComponent.Editor
 {
+    internal readonly struct OutfitPartTargetPreviewSnapshot :
+        IEquatable<OutfitPartTargetPreviewSnapshot>
+    {
+        internal OutfitPartTargetPreviewSnapshot(
+            PrefabTargetKey targetKey,
+            bool activeWhenOn)
+        {
+            TargetKey = targetKey;
+            ActiveWhenOn = activeWhenOn;
+        }
+
+        internal PrefabTargetKey TargetKey { get; }
+        internal bool ActiveWhenOn { get; }
+
+        public bool Equals(OutfitPartTargetPreviewSnapshot other)
+        {
+            return TargetKey.Equals(other.TargetKey)
+                   && ActiveWhenOn == other.ActiveWhenOn;
+        }
+
+        public override bool Equals(object obj)
+        {
+            return obj is OutfitPartTargetPreviewSnapshot other && Equals(other);
+        }
+
+        public override int GetHashCode()
+        {
+            unchecked
+            {
+                return (TargetKey.GetHashCode() * 397) ^ ActiveWhenOn.GetHashCode();
+            }
+        }
+    }
+
+    internal sealed class OutfitPartPreviewSnapshot :
+        IEquatable<OutfitPartPreviewSnapshot>
+    {
+        internal OutfitPartPreviewSnapshot(
+            string key,
+            string label,
+            bool initialOn,
+            bool initialResolved,
+            ImmutableArray<OutfitPartTargetPreviewSnapshot> targets)
+        {
+            Key = key ?? string.Empty;
+            Label = label ?? string.Empty;
+            InitialOn = initialOn;
+            InitialResolved = initialResolved;
+            Targets = targets.IsDefault
+                ? ImmutableArray<OutfitPartTargetPreviewSnapshot>.Empty
+                : targets;
+        }
+
+        internal string Key { get; }
+        internal string Label { get; }
+        internal bool InitialOn { get; }
+        internal bool InitialResolved { get; }
+        internal ImmutableArray<OutfitPartTargetPreviewSnapshot> Targets { get; }
+
+        public bool Equals(OutfitPartPreviewSnapshot other)
+        {
+            return other != null
+                   && string.Equals(Key, other.Key, StringComparison.Ordinal)
+                   && string.Equals(Label, other.Label, StringComparison.Ordinal)
+                   && InitialOn == other.InitialOn
+                   && InitialResolved == other.InitialResolved
+                   && Targets.SequenceEqual(other.Targets);
+        }
+
+        public override bool Equals(object obj)
+        {
+            return Equals(obj as OutfitPartPreviewSnapshot);
+        }
+
+        public override int GetHashCode()
+        {
+            unchecked
+            {
+                var hashCode = StringComparer.Ordinal.GetHashCode(Key);
+                hashCode = (hashCode * 397) ^ StringComparer.Ordinal.GetHashCode(Label);
+                hashCode = (hashCode * 397) ^ InitialOn.GetHashCode();
+                hashCode = (hashCode * 397) ^ InitialResolved.GetHashCode();
+                foreach (var target in Targets)
+                    hashCode = (hashCode * 397) ^ target.GetHashCode();
+                return hashCode;
+            }
+        }
+    }
+
     internal sealed class OutfitPreviewRequest
     {
         private OutfitPreviewRequest(
@@ -17,7 +107,8 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             string dependencyHash,
             bool initialOn,
             PlacementState[] placementStates,
-            int[] exclusionRendererIds)
+            int[] exclusionRendererIds,
+            ImmutableArray<OutfitPartPreviewSnapshot> parts)
         {
             SourcePrefab = sourcePrefab;
             AvatarRoot = avatarRoot;
@@ -27,6 +118,9 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             InitialOn = initialOn;
             PlacementStates = placementStates;
             ExclusionRendererIds = exclusionRendererIds;
+            Parts = parts.IsDefault
+                ? ImmutableArray<OutfitPartPreviewSnapshot>.Empty
+                : parts;
         }
 
         internal GameObject SourcePrefab { get; }
@@ -35,6 +129,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
         internal IReadOnlyList<GameObject> Exclusions { get; }
         internal string DependencyHash { get; }
         internal bool InitialOn { get; }
+        internal ImmutableArray<OutfitPartPreviewSnapshot> Parts { get; }
         private PlacementState[] PlacementStates { get; }
         private int[] ExclusionRendererIds { get; }
 
@@ -45,6 +140,59 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             IEnumerable<GameObject> exclusions,
             string dependencyHash,
             bool initialOn,
+            out OutfitPreviewRequest request,
+            out string error)
+        {
+            return TryCreateCore(
+                sourcePrefab,
+                avatarRoot,
+                placement,
+                exclusions,
+                dependencyHash,
+                initialOn,
+                null,
+                null,
+                false,
+                out request,
+                out error);
+        }
+
+        internal static bool TryCreate(
+            GameObject sourcePrefab,
+            GameObject avatarRoot,
+            Transform placement,
+            IEnumerable<GameObject> exclusions,
+            string dependencyHash,
+            bool initialOn,
+            OutfitAnalysis analysis,
+            IEnumerable<PartTogglePlan> partToggles,
+            out OutfitPreviewRequest request,
+            out string error)
+        {
+            return TryCreateCore(
+                sourcePrefab,
+                avatarRoot,
+                placement,
+                exclusions,
+                dependencyHash,
+                initialOn,
+                analysis,
+                partToggles,
+                true,
+                out request,
+                out error);
+        }
+
+        private static bool TryCreateCore(
+            GameObject sourcePrefab,
+            GameObject avatarRoot,
+            Transform placement,
+            IEnumerable<GameObject> exclusions,
+            string dependencyHash,
+            bool initialOn,
+            OutfitAnalysis analysis,
+            IEnumerable<PartTogglePlan> partToggles,
+            bool validateParts,
             out OutfitPreviewRequest request,
             out string error)
         {
@@ -138,6 +286,19 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                 }
             }
 
+            var parts = ImmutableArray<OutfitPartPreviewSnapshot>.Empty;
+            if (validateParts
+                && !TryCreatePartSnapshots(
+                    sourcePrefab,
+                    dependencyHash,
+                    analysis,
+                    partToggles,
+                    out parts,
+                    out error))
+            {
+                return false;
+            }
+
             request = new OutfitPreviewRequest(
                 sourcePrefab,
                 avatarRoot,
@@ -146,20 +307,38 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                 dependencyHash,
                 initialOn,
                 CapturePlacementStates(avatarRoot.transform, placement),
-                CaptureExclusionRendererIds(resolvedExclusions));
+                CaptureExclusionRendererIds(resolvedExclusions),
+                parts);
             return true;
+        }
+
+        internal bool IsMirrorStructureEquivalentTo(OutfitPreviewRequest other)
+        {
+            return other != null
+                   && SourcePrefab == other.SourcePrefab
+                   && AvatarRoot == other.AvatarRoot
+                   && Placement == other.Placement
+                   && string.Equals(DependencyHash, other.DependencyHash, StringComparison.Ordinal)
+                   && PlacementStates.SequenceEqual(other.PlacementStates);
+        }
+
+        internal bool HasEquivalentExclusionRendererSetTo(OutfitPreviewRequest other)
+        {
+            return other != null
+                   && ExclusionRendererIds.SequenceEqual(other.ExclusionRendererIds);
+        }
+
+        internal bool HasEquivalentPartsTo(OutfitPreviewRequest other)
+        {
+            return other != null && Parts.SequenceEqual(other.Parts);
         }
 
         internal bool IsStructurallyEquivalentTo(OutfitPreviewRequest other)
         {
-            if (other == null
-                || SourcePrefab != other.SourcePrefab
-                || AvatarRoot != other.AvatarRoot
-                || Placement != other.Placement
-                || !string.Equals(DependencyHash, other.DependencyHash, StringComparison.Ordinal)
+            if (!IsMirrorStructureEquivalentTo(other)
                 || Exclusions.Count != other.Exclusions.Count
-                || !PlacementStates.SequenceEqual(other.PlacementStates)
-                || !ExclusionRendererIds.SequenceEqual(other.ExclusionRendererIds))
+                || !HasEquivalentExclusionRendererSetTo(other)
+                || !HasEquivalentPartsTo(other))
             {
                 return false;
             }
@@ -169,6 +348,115 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                 if (Exclusions[index] != other.Exclusions[index]) return false;
             }
 
+            return true;
+        }
+
+        private static bool TryCreatePartSnapshots(
+            GameObject sourcePrefab,
+            string dependencyHash,
+            OutfitAnalysis analysis,
+            IEnumerable<PartTogglePlan> partToggles,
+            out ImmutableArray<OutfitPartPreviewSnapshot> snapshots,
+            out string error)
+        {
+            snapshots = ImmutableArray<OutfitPartPreviewSnapshot>.Empty;
+            error = null;
+
+            if (analysis == null
+                || analysis.SourcePrefab != sourcePrefab
+                || !string.Equals(analysis.DependencyHash, dependencyHash, StringComparison.Ordinal))
+            {
+                error = "個別パーツの解析結果が入力Prefabと一致しません。ウィザードを開き直してください。";
+                return false;
+            }
+
+            var parts = (partToggles ?? Enumerable.Empty<PartTogglePlan>()).ToArray();
+            var allTargetKeys = new List<PrefabTargetKey>();
+            var builder = ImmutableArray.CreateBuilder<OutfitPartPreviewSnapshot>(parts.Length);
+            for (var partIndex = 0; partIndex < parts.Length; partIndex++)
+            {
+                var part = parts[partIndex];
+                if (part == null)
+                {
+                    error = $"個別項目{partIndex + 1}が不正です。";
+                    return false;
+                }
+
+                if (part.Targets.Count == 0)
+                {
+                    error = $"個別項目「{part.Label}」に対象がありません。";
+                    return false;
+                }
+
+                var targetBuilder =
+                    ImmutableArray.CreateBuilder<OutfitPartTargetPreviewSnapshot>(
+                        part.Targets.Count);
+                foreach (var targetKey in part.Targets)
+                {
+                    if (targetKey.IsRoot)
+                    {
+                        error = "衣装Prefabのルート自体は個別パーツに指定できません。";
+                        return false;
+                    }
+
+                    if (!string.Equals(
+                            targetKey.DependencyHash,
+                            dependencyHash,
+                            StringComparison.Ordinal)
+                        || targetKey.Resolve(sourcePrefab, dependencyHash) == null
+                        || analysis.FindTarget(targetKey) == null)
+                    {
+                        error = $"個別項目「{part.Label}」の対象が解析時のPrefabと一致しません。";
+                        return false;
+                    }
+
+                    if (allTargetKeys.Contains(targetKey))
+                    {
+                        error = "同じPrefab内オブジェクトが複数の個別項目に指定されています。";
+                        return false;
+                    }
+
+                    allTargetKeys.Add(targetKey);
+                    targetBuilder.Add(new OutfitPartTargetPreviewSnapshot(
+                        targetKey,
+                        part.GetTargetActiveWhenOn(targetKey)));
+                }
+
+                var targets = targetBuilder
+                    .ToImmutable()
+                    .OrderBy(
+                        target => target.TargetKey.SiblingIndexPath,
+                        StringComparer.Ordinal)
+                    .ToImmutableArray();
+                var initialResolved = part.TryGetEffectiveInitialOn(analysis, out var initialOn);
+                if (!initialResolved) initialOn = false;
+                var key = string.Join(
+                    "|",
+                    targets.Select(target => target.TargetKey.SiblingIndexPath));
+                builder.Add(new OutfitPartPreviewSnapshot(
+                    key,
+                    part.Label,
+                    initialOn,
+                    initialResolved,
+                    targets));
+            }
+
+            for (var left = 0; left < allTargetKeys.Count; left++)
+            {
+                for (var right = left + 1; right < allTargetKeys.Count; right++)
+                {
+                    if (!allTargetKeys[left].IsAncestorOf(allTargetKeys[right])
+                        && !allTargetKeys[right].IsAncestorOf(allTargetKeys[left]))
+                    {
+                        continue;
+                    }
+
+                    error = "個別パーツの対象に祖先・子孫関係のあるGameObjectを同時指定できません。";
+                    return false;
+                }
+            }
+
+            snapshots = builder.ToImmutable();
             return true;
         }
 

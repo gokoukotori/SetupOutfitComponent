@@ -19,7 +19,7 @@
 Packages/com.gokoukotori.setup-outfit-component
 ```
 
-配布用VPMリポジトリやGit URLからの導入は、バージョン0.2.0では提供していません。
+配布用VPMリポジトリやGit URLからの導入は、バージョン0.2.1では提供していません。
 
 ## 使い方
 
@@ -55,7 +55,7 @@ Assets/Setup Outfit Component/衣装セットアップ...
 
 全体トグルは`ON = 衣装を表示`です。指定した排他対象は衣装ON時に非表示になります。
 
-適用プレビューはNDMFのカメラ別PreviewSessionを使用し、専用SceneViewだけへ適用されます。元Scene、Prefab、Transform、Selection、Undo、通常のSceneViewやNDMFプレビュー設定は変更しません。プレビュー対象は衣装と排他対象の表示状態だけです。MA標準セットアップ、Merge Armature、個別パーツ、BlendShape Sync、最終NDMFビルド後のArmature統合結果は反映しません。
+適用プレビューはNDMFのカメラ別PreviewSessionを使用し、専用SceneViewだけへ適用されます。元Scene、Prefab、Transform、Selection、Undo、通常のSceneViewやNDMFプレビュー設定は変更しません。プレビュー対象は衣装全体、排他対象、個別パーツの表示状態です。MA標準セットアップ、Merge Armature、BlendShape Sync、最終NDMFビルド後のArmature統合結果は反映しません。
 
 ### 4. 個別パーツ
 
@@ -64,6 +64,10 @@ Assets/Setup Outfit Component/衣装セットアップ...
 - 新しいターゲットのON時状態は既定で非表示です。
 - メニュー初期状態はPrefabの`activeSelf`から自動判定するか、初期OFF／初期ONを明示できます。
 - 複数ターゲットの状態が混在し、自動判定できない場合は初期状態の明示が必要です。
+- `個別パーツプレビューを開く`から専用SceneViewを開き、各項目を`メニューON`／`メニューOFF`へ切り替えて見え方を確認できます。ステップ4から開いた場合、衣装全体はプレビュー内だけONで開始します。全体OFFでは衣装全体が非表示になり、全体ONへ戻すと選択中の個別状態が再び反映されます。
+- プレビュー開始時はウィザードで設定した各項目の初期状態を使用します。`個別項目を初期状態に戻す`で全項目をその状態へ戻せます。
+- 初期状態を自動判定できない項目もプレビュー上では仮にOFFから確認できますが、Scene生成前には従来どおり初期OFFまたは初期ONを明示する必要があります。
+- プレビューウィンドウ内で切り替えた個別状態は確認用の一時状態です。ウィザードのメニュー初期状態、生成計画、元Prefab、Sceneには書き戻しません。
 
 ### 5. BlendShape Sync
 
@@ -118,9 +122,9 @@ Assets/Setup Outfit Component/衣装セットアップ...
 - 出力名の衝突
 - 明示許可していない同一Prefabの重複配置
 
-バージョン0.2.0では、次の機能は対象外です。
+バージョン0.2.1では、次の機能は対象外です。
 
-- 適用プレビューでのMA標準セットアップ、Merge Armature、個別パーツ、BlendShape Sync、最終NDMFビルド結果の再現
+- 適用プレビューでのMA標準セットアップ、Merge Armature、BlendShape Sync、最終NDMFビルド結果の再現
 - BlendShapeのRemap Curve編集
 - MA Shape Changer、Material Swapの自動生成
 - 元PrefabのComponent／GameObject削除

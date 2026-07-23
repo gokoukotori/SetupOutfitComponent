@@ -370,6 +370,14 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             EditorGUILayout.HelpBox(
                 "1つ以上のPrefab内GameObjectを1つのトグル項目へまとめ、対象ごとにメニューON時の表示／非表示を指定できます。",
                 MessageType.Info);
+            using (new EditorGUI.DisabledScope(!CanAttemptApplyPreview()))
+            {
+                if (GUILayout.Button("個別パーツプレビューを開く", GUILayout.Height(30f)))
+                    OpenApplyPreview(true);
+            }
+            EditorGUILayout.HelpBox(
+                "プレビュー内のメニューON／OFFは見え方確認用の一時状態です。この画面の初期状態設定には書き戻しません。",
+                MessageType.None);
             using (new EditorGUILayout.HorizontalScope())
             {
                 _showAllPrefabObjects = EditorGUILayout.ToggleLeft("Renderer以外も表示", _showAllPrefabObjects, GUILayout.Width(150f));
@@ -418,10 +426,17 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                 {
                     using (new EditorGUILayout.HorizontalScope())
                     {
-                        part.Label = EditorGUILayout.TextField("表示名", part.Label);
+                        EditorGUI.BeginChangeCheck();
+                        var nextLabel = EditorGUILayout.TextField("表示名", part.Label);
+                        if (EditorGUI.EndChangeCheck())
+                        {
+                            part.Label = nextLabel;
+                            UpdateApplyPreviewIfOpen();
+                        }
                         if (GUILayout.Button("削除", GUILayout.Width(52f)))
                         {
                             _plan.PartToggles.RemoveAt(index);
+                            UpdateApplyPreviewIfOpen();
                             GUIUtility.ExitGUI();
                         }
                     }
@@ -438,7 +453,12 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                                 activeWhenOn ? 0 : 1,
                                 TargetOnStateLabels,
                                 GUILayout.Width(80f));
-                            part.SetTargetActiveWhenOn(targetKey, nextState == 0);
+                            var nextActiveWhenOn = nextState == 0;
+                            if (nextActiveWhenOn != activeWhenOn)
+                            {
+                                part.SetTargetActiveWhenOn(targetKey, nextActiveWhenOn);
+                                UpdateApplyPreviewIfOpen();
+                            }
                         }
                     }
 
@@ -447,7 +467,11 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                         "メニュー初期状態",
                         initialState,
                         PartInitialStateLabels);
-                    part.InitialOn = nextInitialState == 0 ? (bool?)null : nextInitialState == 2;
+                    if (nextInitialState != initialState)
+                    {
+                        part.InitialOn = nextInitialState == 0 ? (bool?)null : nextInitialState == 2;
+                        UpdateApplyPreviewIfOpen();
+                    }
 
                     if (!part.InitialOn.HasValue && part.TryGetEffectiveInitialOn(_analysis, out var inherited))
                     {
@@ -918,15 +942,17 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                 _exclusionObjects,
                 _analysis != null ? _analysis.DependencyHash : null,
                 _plan != null && _plan.MasterDefaultOn,
+                _analysis,
+                _plan != null ? _plan.PartToggles : null,
                 out request,
                 out error);
         }
 
-        private void OpenApplyPreview()
+        private void OpenApplyPreview(bool forceOutfitOn = false)
         {
             if (TryCreateApplyPreviewRequest(out var request, out var error))
             {
-                OutfitApplyPreviewWindow.OpenOrUpdate(this, request);
+                OutfitApplyPreviewWindow.OpenOrUpdate(this, request, forceOutfitOn);
                 return;
             }
 
@@ -1026,11 +1052,14 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
 
         private void AddRendererCandidates()
         {
+            var added = false;
             foreach (var candidate in _analysis.PartCandidates)
             {
                 if (_plan.PartToggles.Any(part => part.Targets.Contains(candidate.TargetKey))) continue;
                 _plan.PartToggles.Add(new PartTogglePlan(candidate.Name, new[] { candidate.TargetKey }));
+                added = true;
             }
+            if (added) UpdateApplyPreviewIfOpen();
         }
 
         private void AddSelectedPartGroup()
@@ -1042,6 +1071,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                 targets.Length == 1 ? targets[0].Name : "パーツ",
                 targets.Select(target => target.TargetKey)));
             _selectedPartTargets.Clear();
+            UpdateApplyPreviewIfOpen();
         }
 
         private void Generate()
