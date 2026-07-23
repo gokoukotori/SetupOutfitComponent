@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
 
-namespace Gokoukotori.SetupComponents.Editor
+namespace Gokoukotori.SetupOutfitComponent.Editor
 {
     internal readonly struct PrefabTargetKey : IEquatable<PrefabTargetKey>
     {

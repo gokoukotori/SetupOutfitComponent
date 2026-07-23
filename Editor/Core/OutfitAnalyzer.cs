@@ -6,7 +6,7 @@ using UnityEditor;
 using UnityEngine;
 using VRC.SDK3.Avatars.Components;
 
-namespace Gokoukotori.SetupComponents.Editor
+namespace Gokoukotori.SetupOutfitComponent.Editor
 {
     internal static class OutfitAnalyzer
     {

@@ -7,7 +7,7 @@ using UnityEditor.SceneManagement;
 using UnityEngine;
 using VRC.SDK3.Avatars.Components;
 
-namespace Gokoukotori.SetupComponents.Editor
+namespace Gokoukotori.SetupOutfitComponent.Editor
 {
     internal interface IOutfitSetupValidator
     {

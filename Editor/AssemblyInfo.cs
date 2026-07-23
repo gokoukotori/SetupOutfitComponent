@@ -1,3 +1,3 @@
 using System.Runtime.CompilerServices;
 
-[assembly: InternalsVisibleTo("Gokoukotori.SetupComponents.Editor.Tests")]
+[assembly: InternalsVisibleTo("Gokoukotori.SetupOutfitComponent.Editor.Tests")]

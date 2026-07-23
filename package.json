@@ -1,6 +1,6 @@
 {
-  "name": "com.gokoukotori.setup-components",
-  "displayName": "Setup Components",
+  "name": "com.gokoukotori.setup-outfit-component",
+  "displayName": "Setup Outfit Component",
   "version": "0.1.0",
   "unity": "2022.3",
   "description": "Editor tools for setting up avatar outfit components.",

@@ -4,11 +4,11 @@ using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
 
-namespace Gokoukotori.SetupComponents.Editor
+namespace Gokoukotori.SetupOutfitComponent.Editor
 {
     internal static class OutfitSetupMenu
     {
-        private const string MenuPath = "Assets/Setup Components/衣装セットアップ...";
+        private const string MenuPath = "Assets/Setup Outfit Component/衣装セットアップ...";
 
         [MenuItem(MenuPath, false, 2000)]
         private static void Open()

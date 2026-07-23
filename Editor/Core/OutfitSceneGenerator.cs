@@ -7,7 +7,7 @@ using UnityEditor.SceneManagement;
 using UnityEngine;
 using VRC.SDK3.Avatars.ScriptableObjects;
 
-namespace Gokoukotori.SetupComponents.Editor
+namespace Gokoukotori.SetupOutfitComponent.Editor
 {
     internal sealed class OutfitSceneGenerator
     {

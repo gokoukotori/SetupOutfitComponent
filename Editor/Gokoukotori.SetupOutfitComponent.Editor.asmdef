@@ -1,6 +1,6 @@
 {
-  "name": "Gokoukotori.SetupComponents.Editor",
-  "rootNamespace": "Gokoukotori.SetupComponents.Editor",
+  "name": "Gokoukotori.SetupOutfitComponent.Editor",
+  "rootNamespace": "Gokoukotori.SetupOutfitComponent.Editor",
   "references": [
     "nadena.dev.modular-avatar.core",
     "nadena.dev.modular-avatar.core.editor",

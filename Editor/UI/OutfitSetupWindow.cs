@@ -7,7 +7,7 @@ using UnityEngine;
 using UnityEngine.SceneManagement;
 using VRC.SDK3.Avatars.Components;
 
-namespace Gokoukotori.SetupComponents.Editor
+namespace Gokoukotori.SetupOutfitComponent.Editor
 {
     internal sealed class OutfitSetupWindow : EditorWindow
     {
@@ -85,7 +85,7 @@ namespace Gokoukotori.SetupComponents.Editor
             if (_sourcePrefab == null || _analysis == null || _plan == null)
             {
                 EditorGUILayout.HelpBox(
-                    "Project上の衣装Prefabを右クリックし、Assets/Setup Components/衣装セットアップ... から開いてください。",
+                    "Project上の衣装Prefabを右クリックし、Assets/Setup Outfit Component/衣装セットアップ... から開いてください。",
                     MessageType.Info);
                 return;
             }

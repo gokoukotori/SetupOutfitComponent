@@ -1,6 +1,6 @@
-# Setup Components
+# Setup Outfit Component
 
-`Setup Components`は、VRChatアバター用の衣装Prefabを解析し、Modular Avatarを使った装着・メニュー・トグル・BlendShape Sync構成をScene上へ生成するEditor専用パッケージです。
+`Setup Outfit Component`は、VRChatアバター用の衣装Prefabを解析し、Modular Avatarを使った装着・メニュー・トグル・BlendShape Sync構成をScene上へ生成するEditor専用パッケージです。
 
 設定中はPrefabやSceneを変更せず、最終確認で「シーンに生成」を実行したときだけSceneへ出力します。元Prefabの保存や変更、独自Runtime Componentの追加は行いません。
 
@@ -15,7 +15,7 @@
 このパッケージは埋め込みUPMパッケージです。Unityプロジェクトの次の場所へ配置し、必要環境に記載した依存パッケージを導入してください。
 
 ```text
-Packages/com.gokoukotori.setup-components
+Packages/com.gokoukotori.setup-outfit-component
 ```
 
 配布用VPMリポジトリやGit URLからの導入は、バージョン0.1.0では提供していません。
@@ -25,7 +25,7 @@ Packages/com.gokoukotori.setup-components
 Projectウィンドウで衣装Prefabのルートを選択し、右クリックメニューから次を実行します。
 
 ```text
-Assets/Setup Components/衣装セットアップ...
+Assets/Setup Outfit Component/衣装セットアップ...
 ```
 
 ウィザードは次の6ステップで構成されています。
