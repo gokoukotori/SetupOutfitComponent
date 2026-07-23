@@ -18,7 +18,7 @@
 Packages/com.gokoukotori.setup-outfit-component
 ```
 
-配布用VPMリポジトリやGit URLからの導入は、バージョン0.1.0では提供していません。
+配布用VPMリポジトリやGit URLからの導入は、バージョン0.1.1では提供していません。
 
 ## 使い方
 
@@ -114,7 +114,7 @@ Assets/Setup Outfit Component/衣装セットアップ...
 - 出力名の衝突
 - 明示許可していない同一Prefabの重複配置
 
-バージョン0.1.0では、次の機能は対象外です。
+バージョン0.1.1では、次の機能は対象外です。
 
 - BlendShapeのRemap Curve編集
 - MA Shape Changer、Material Swapの自動生成
