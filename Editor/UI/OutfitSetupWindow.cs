@@ -44,9 +44,16 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
         private readonly HashSet<PrefabTargetKey> _selectedPartTargets = new HashSet<PrefabTargetKey>();
         private readonly Dictionary<PrefabTargetKey, SkinnedMeshRenderer> _blendshapeSourceRenderers =
             new Dictionary<PrefabTargetKey, SkinnedMeshRenderer>();
+        private readonly BlendshapeUiCache _blendshapeUiCache = new BlendshapeUiCache();
+        private readonly SceneReferenceRefreshGate _sceneReferenceRefreshGate =
+            new SceneReferenceRefreshGate();
+        private readonly ReviewValidationCache _reviewValidationCache =
+            new ReviewValidationCache();
         private bool _showAllPrefabObjects;
         private string _localReferenceError;
         private string _exclusionDropMessage;
+
+        internal BlendshapeUiCache BlendshapeUiCacheForTests => _blendshapeUiCache;
 
         internal static void Open(GameObject sourcePrefab)
         {
@@ -56,11 +63,12 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             window.Show();
         }
 
-        private void Initialize(GameObject sourcePrefab)
+        internal void Initialize(GameObject sourcePrefab)
         {
             _sourcePrefab = sourcePrefab;
             _analysis = OutfitAnalyzer.Analyze(sourcePrefab);
             _plan = new OutfitSetupPlan(_analysis);
+            _blendshapeUiCache.SetAnalysis(_analysis);
             _step = 0;
             _scrollPosition = Vector2.zero;
             _selectedPartTargets.Clear();
@@ -68,15 +76,54 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             _exclusionObjects.Clear();
             _localReferenceError = null;
             _exclusionDropMessage = null;
+            _sceneReferenceRefreshGate.Invalidate();
+            InvalidateReviewValidation();
             RefreshAvatars(true);
         }
 
-        private void OnEnable() => titleContent = new GUIContent("衣装セットアップ");
+        private void OnEnable()
+        {
+            titleContent = new GUIContent("衣装セットアップ");
+            EditorSceneManager.sceneSaved -= OnSceneSaved;
+            EditorSceneManager.sceneSaved += OnSceneSaved;
+        }
+
+        private void OnDisable()
+        {
+            EditorSceneManager.sceneSaved -= OnSceneSaved;
+        }
 
         private void OnHierarchyChange()
         {
+            HandleHierarchyChange();
+        }
+
+        internal void HandleHierarchyChange()
+        {
+            _blendshapeUiCache.InvalidateAvatar();
             if (_plan == null) return;
             RefreshAvatars(false);
+            RefreshSceneReferencesAfterChange();
+            Repaint();
+        }
+
+        private void OnProjectChange()
+        {
+            HandleProjectChange();
+        }
+
+        internal void HandleProjectChange()
+        {
+            _blendshapeUiCache.InvalidateProject();
+            InvalidateReviewValidation();
+            Repaint();
+        }
+
+        private void OnSceneSaved(Scene scene)
+        {
+            if (_plan == null) return;
+            _blendshapeUiCache.InvalidateAvatar();
+            RefreshSceneReferencesAfterChange();
             Repaint();
         }
 
@@ -165,7 +212,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             if (EditorGUI.EndChangeCheck())
             {
                 _placement = nextPlacement;
-                UpdateSceneReferences();
+                RefreshSceneReferencesAfterChange();
             }
 
             if (_selectedAvatar != null && _placement != null
@@ -201,12 +248,12 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                     if (EditorGUI.EndChangeCheck())
                     {
                         _exclusionObjects[index] = next;
-                        UpdateSceneReferences();
+                        RefreshSceneReferencesAfterChange();
                     }
                     if (GUILayout.Button("削除", GUILayout.Width(52f)))
                     {
                         _exclusionObjects.RemoveAt(index);
-                        UpdateSceneReferences();
+                        RefreshSceneReferencesAfterChange();
                         GUIUtility.ExitGUI();
                     }
                 }
@@ -251,7 +298,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                 {
                     _exclusionObjects.AddRange(droppedObjects);
                     _exclusionDropMessage = droppedObjects.Count + "件の対象を追加しました。";
-                    UpdateSceneReferences();
+                    RefreshSceneReferencesAfterChange();
                 }
                 else
                 {
@@ -397,7 +444,6 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
 
         private void DrawBlendshapeStep()
         {
-            UpdateSceneReferences();
             EditorGUILayout.LabelField("MA Blendshape Sync", EditorStyles.boldLabel);
             EditorGUILayout.HelpBox(
                 "衣装Rendererごとに、対象アバター内の同期元Rendererを1つ選びます。Remap Curveは編集せず、0→0・100→100の恒等変換で生成します。",
@@ -428,7 +474,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                 using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
                 {
                     EditorGUILayout.LabelField(localRenderer.DisplayPath, EditorStyles.boldLabel);
-                    DrawOutfitBlendshapeNames(localRenderer.BlendshapeNames);
+                    DrawOutfitBlendshapeNames(localRenderer);
 
                     if (localRenderer.HasExistingBlendshapeSync)
                     {
@@ -462,17 +508,17 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             DrawLocalReferenceError();
         }
 
-        private static void DrawOutfitBlendshapeNames(IReadOnlyList<string> blendshapeNames)
+        private void DrawOutfitBlendshapeNames(OutfitRendererInfo renderer)
         {
             EditorGUILayout.LabelField(
-                "衣装BlendShape（" + blendshapeNames.Count + "件）",
+                "衣装BlendShape（" + renderer.BlendshapeNames.Count + "件）",
                 EditorStyles.miniBoldLabel);
-            if (blendshapeNames.Count == 0) return;
+            if (renderer.BlendshapeNames.Count == 0) return;
 
             using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
             {
                 GUILayout.Label(
-                    string.Join(" / ", blendshapeNames),
+                    _blendshapeUiCache.GetLocalDisplayText(renderer),
                     EditorStyles.wordWrappedMiniLabel);
             }
         }
@@ -490,27 +536,35 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                     if (nextSource == null) _blendshapeSourceRenderers.Remove(sync.LocalRendererKey);
                     else _blendshapeSourceRenderers[sync.LocalRendererKey] = nextSource;
                     sync.Mappings.Clear();
-                    UpdateSceneReferences();
+                    RefreshSceneReferencesAfterChange();
                 }
 
                 if (GUILayout.Button("設定を削除", GUILayout.Width(80f)))
                 {
                     _plan.BlendshapeSyncs.Remove(sync);
                     _blendshapeSourceRenderers.Remove(sync.LocalRendererKey);
+                    InvalidateReviewValidation();
                     GUIUtility.ExitGUI();
                 }
             }
 
-            var sourceShapeNames = GetBlendshapeNames(sourceRenderer);
+            var sourceOptions = _blendshapeUiCache.GetSourceOptions(sourceRenderer);
+            var localOptions = _blendshapeUiCache.GetLocalOptions(localRenderer);
             using (new EditorGUILayout.HorizontalScope())
             {
-                using (new EditorGUI.DisabledScope(sourceShapeNames.Count == 0))
+                using (new EditorGUI.DisabledScope(sourceOptions.Names.Count == 0))
                 {
                     if (GUILayout.Button("同名BlendShapeを一括追加"))
-                        AddSameNameBlendshapeMappings(sync, sourceShapeNames, localRenderer.BlendshapeNames);
+                    {
+                        AddSameNameBlendshapeMappings(sync, sourceOptions.Names, localRenderer.BlendshapeNames);
+                        InvalidateReviewValidation();
+                    }
                 }
                 if (GUILayout.Button("マッピングを追加"))
+                {
                     sync.Mappings.Add(new BlendshapeMappingPlan(string.Empty, string.Empty));
+                    InvalidateReviewValidation();
+                }
             }
 
             if (sync.Mappings.Count == 0)
@@ -525,12 +579,13 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                 var mapping = sync.Mappings[index];
                 using (new EditorGUILayout.HorizontalScope())
                 {
-                    DrawBlendshapePopup(mapping, true, sourceShapeNames, GUILayout.MinWidth(150f));
+                    DrawBlendshapePopup(mapping, true, sourceOptions, GUILayout.MinWidth(150f));
                     EditorGUILayout.LabelField("→", GUILayout.Width(18f));
-                    DrawBlendshapePopup(mapping, false, localRenderer.BlendshapeNames, GUILayout.MinWidth(150f));
+                    DrawBlendshapePopup(mapping, false, localOptions, GUILayout.MinWidth(150f));
                     if (GUILayout.Button("削除", GUILayout.Width(52f)))
                     {
                         sync.Mappings.RemoveAt(index);
+                        InvalidateReviewValidation();
                         GUIUtility.ExitGUI();
                     }
                 }
@@ -542,15 +597,10 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             IReadOnlyList<SkinnedMeshRenderer> sourceCandidates)
         {
             var sourceRenderer = sourceCandidates.Count == 1 ? sourceCandidates[0] : null;
-            SceneObjectReference sourceReference = null;
             if (sourceRenderer != null)
-            {
                 _blendshapeSourceRenderers[localRenderer.TargetKey] = sourceRenderer;
-                sourceReference = TryCreateSceneReference(
-                    sourceRenderer.gameObject,
-                    "BlendShape同期元 " + sourceRenderer.name);
-            }
-            _plan.BlendshapeSyncs.Add(new BlendshapeSyncPlan(localRenderer.TargetKey, sourceReference));
+            _plan.BlendshapeSyncs.Add(new BlendshapeSyncPlan(localRenderer.TargetKey, null));
+            RefreshSceneReferencesAfterChange();
         }
 
         internal static void AddSameNameBlendshapeMappings(
@@ -578,53 +628,62 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             }
         }
 
-        private static void DrawBlendshapePopup(
+        private void DrawBlendshapePopup(
             BlendshapeMappingPlan mapping,
             bool source,
-            IReadOnlyList<string> shapeNames,
-            params GUILayoutOption[] options)
+            BlendshapeOptionSet shapeOptions,
+            params GUILayoutOption[] layoutOptions)
         {
             var current = source ? mapping.SourceShape : mapping.LocalShape;
-            var names = shapeNames.Distinct(StringComparer.Ordinal).ToArray();
-            var labels = new[] { "<選択してください>" }.Concat(names).ToArray();
-            var currentIndex = Array.IndexOf(names, current);
-            var selectedIndex = currentIndex < 0 ? 0 : currentIndex + 1;
-            var nextIndex = EditorGUILayout.Popup(selectedIndex, labels, options);
-            if (nextIndex == selectedIndex) return;
+            var content = new GUIContent(
+                string.IsNullOrEmpty(current) ? "<選択してください>" : current);
+            var rect = EditorGUILayout.GetControlRect(
+                false,
+                EditorGUIUtility.singleLineHeight,
+                EditorStyles.popup,
+                layoutOptions);
+            if (!EditorGUI.DropdownButton(rect, content, FocusType.Keyboard, EditorStyles.popup)) return;
 
-            var nextValue = nextIndex <= 0 ? string.Empty : names[nextIndex - 1];
-            if (source) mapping.SourceShape = nextValue;
-            else mapping.LocalShape = nextValue;
+            var menu = new GenericMenu();
+            menu.AddItem(
+                new GUIContent("<選択してください>"),
+                string.IsNullOrEmpty(current),
+                () => SetBlendshapeMapping(mapping, source, string.Empty));
+            foreach (var shapeName in shapeOptions.Names)
+            {
+                var capturedName = shapeName;
+                menu.AddItem(
+                    new GUIContent(capturedName),
+                    string.Equals(current, capturedName, StringComparison.Ordinal),
+                    () => SetBlendshapeMapping(mapping, source, capturedName));
+            }
+
+            menu.DropDown(rect);
+        }
+
+        private void SetBlendshapeMapping(
+            BlendshapeMappingPlan mapping,
+            bool source,
+            string value)
+        {
+            if (source) mapping.SourceShape = value;
+            else mapping.LocalShape = value;
+            InvalidateReviewValidation();
+            Repaint();
         }
 
         private IReadOnlyList<SkinnedMeshRenderer> GetAvatarBlendshapeRenderers()
         {
-            if (_selectedAvatar == null) return Array.Empty<SkinnedMeshRenderer>();
-            return _selectedAvatar.GetComponentsInChildren<SkinnedMeshRenderer>(true)
-                .Where(renderer => renderer != null
-                                   && renderer.sharedMesh != null
-                                   && renderer.sharedMesh.blendShapeCount > 0)
-                .OrderBy(renderer => GetRendererLabel(renderer), StringComparer.Ordinal)
-                .ToArray();
+            return _blendshapeUiCache.GetAvatarRenderers(_selectedAvatar);
         }
 
-        private static IReadOnlyList<string> GetBlendshapeNames(SkinnedMeshRenderer renderer)
+        private string GetRendererLabel(SkinnedMeshRenderer renderer)
         {
-            if (renderer == null || renderer.sharedMesh == null) return Array.Empty<string>();
-            return Enumerable.Range(0, renderer.sharedMesh.blendShapeCount)
-                .Select(renderer.sharedMesh.GetBlendShapeName)
-                .ToArray();
-        }
-
-        private static string GetRendererLabel(SkinnedMeshRenderer renderer)
-        {
-            return renderer == null ? "<missing>" : GetHierarchyPath(renderer.transform);
+            return _blendshapeUiCache.GetRendererLabel(renderer);
         }
 
         private void DrawReviewStep()
         {
-            UpdateSceneReferences();
-            var validation = OutfitSetupValidator.Instance.Validate(_plan);
             EditorGUILayout.LabelField("生成予定", EditorStyles.boldLabel);
             EditorGUILayout.LabelField("配置先", _plan.PlacementReference?.DisplayName ?? "<未指定>");
             EditorGUILayout.LabelField("Prefab", _analysis.AssetPath);
@@ -678,13 +737,21 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
 
             EditorGUILayout.Space(8f);
             EditorGUILayout.LabelField("検証", EditorStyles.boldLabel);
+            EditorGUI.BeginChangeCheck();
+            var allowDuplicate = EditorGUILayout.ToggleLeft(
+                "同一Prefabの重複配置を明示的に許可する",
+                _plan.AllowDuplicate);
+            if (EditorGUI.EndChangeCheck())
+            {
+                _plan.AllowDuplicate = allowDuplicate;
+                InvalidateReviewValidation();
+            }
+
+            var validation = GetReviewValidation();
             DrawLocalReferenceError();
             foreach (var message in validation.Messages)
                 EditorGUILayout.HelpBox("[" + message.Code + "] " + message.Message, ToMessageType(message.Severity));
 
-            _plan.AllowDuplicate = EditorGUILayout.ToggleLeft("同一Prefabの重複配置を明示的に許可する", _plan.AllowDuplicate);
-            UpdateSceneReferences();
-            validation = OutfitSetupValidator.Instance.Validate(_plan);
             var environmentBlocked = EditorApplication.isPlayingOrWillChangePlaymode
                                      || PrefabStageUtility.GetCurrentPrefabStage() != null;
             var canGenerate = validation.IsValid && string.IsNullOrEmpty(_localReferenceError) && !environmentBlocked;
@@ -728,6 +795,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                     {
                         if (GUILayout.Button("次へ", GUILayout.Width(100f)))
                         {
+                            if (_step == 4) PrepareReviewValidation();
                             _step++;
                             _scrollPosition = Vector2.zero;
                         }
@@ -754,7 +822,6 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                     return _plan.PartToggles.All(part => !string.IsNullOrWhiteSpace(part.Label)
                         && part.Targets.Count > 0 && part.TryGetEffectiveInitialOn(_analysis, out _));
                 case 4:
-                    UpdateSceneReferences();
                     return string.IsNullOrEmpty(_localReferenceError)
                            && _plan.BlendshapeSyncs.All(sync => sync.SourceRendererReference != null
                                && sync.Mappings.Count > 0
@@ -788,7 +855,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             {
                 _selectedAvatar = null;
                 _placement = null;
-                UpdateSceneReferences();
+                RefreshSceneReferencesAfterChange();
             }
         }
 
@@ -798,11 +865,23 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             {
                 _plan?.BlendshapeSyncs.Clear();
                 _blendshapeSourceRenderers.Clear();
+                _blendshapeUiCache.InvalidateAvatar();
             }
             _selectedAvatar = avatar;
             _placement = avatar != null ? avatar.transform : null;
             _exclusionObjects.Clear();
-            UpdateSceneReferences();
+            RefreshSceneReferencesAfterChange();
+        }
+
+        private void RefreshSceneReferencesAfterChange()
+        {
+            _sceneReferenceRefreshGate.Invalidate();
+            EnsureSceneReferencesCurrent();
+        }
+
+        private void EnsureSceneReferencesCurrent()
+        {
+            _sceneReferenceRefreshGate.EnsureCurrent(UpdateSceneReferences);
         }
 
         private void UpdateSceneReferences()
@@ -835,6 +914,25 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                     sourceRenderer.gameObject,
                     "BlendShape同期元 " + sourceRenderer.name);
             }
+
+            InvalidateReviewValidation();
+        }
+
+        private void PrepareReviewValidation()
+        {
+            EnsureSceneReferencesCurrent();
+            _reviewValidationCache.Invalidate();
+            _reviewValidationCache.Get(() => OutfitSetupValidator.Instance.Validate(_plan));
+        }
+
+        private ValidationResult GetReviewValidation()
+        {
+            return _reviewValidationCache.Get(() => OutfitSetupValidator.Instance.Validate(_plan));
+        }
+
+        private void InvalidateReviewValidation()
+        {
+            _reviewValidationCache.Invalidate();
         }
 
         private SceneObjectReference TryCreateSceneReference(GameObject gameObject, string label)
@@ -882,7 +980,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
         {
             try
             {
-                UpdateSceneReferences();
+                EnsureSceneReferencesCurrent();
                 var generatedRoot = new OutfitSceneGenerator().Generate(_plan);
                 Selection.activeGameObject = generatedRoot;
                 EditorGUIUtility.PingObject(generatedRoot);
