@@ -9,6 +9,7 @@
 - Unity 2022.3.22f1
 - VRChat SDK Avatars 3.10.4
 - Modular Avatar 1.18.0-beta.1
+- Non-Destructive Modular Framework (NDMF) 1.14.1
 
 ## 導入
 
@@ -18,7 +19,7 @@
 Packages/com.gokoukotori.setup-outfit-component
 ```
 
-配布用VPMリポジトリやGit URLからの導入は、バージョン0.1.1では提供していません。
+配布用VPMリポジトリやGit URLからの導入は、バージョン0.2.0では提供していません。
 
 ## 使い方
 
@@ -50,8 +51,11 @@ Assets/Setup Outfit Component/衣装セットアップ...
   - `装着処理を行わない`: 小物などを想定し、配置とメニュー生成だけを行います。
 - SubMenu名、全体トグル名、初期ON/OFFを設定します。
 - 衣装ON時に非表示にする既存Sceneオブジェクトを指定します。Hierarchyで複数選択してドラッグ＆ドロップすることもできます。
+- `適用プレビューを開く`から専用SceneViewを開き、全体ON/OFFと排他対象の見え方を確認できます。
 
 全体トグルは`ON = 衣装を表示`です。指定した排他対象は衣装ON時に非表示になります。
+
+適用プレビューはNDMFのカメラ別PreviewSessionを使用し、専用SceneViewだけへ適用されます。元Scene、Prefab、Transform、Selection、Undo、通常のSceneViewやNDMFプレビュー設定は変更しません。プレビュー対象は衣装と排他対象の表示状態だけです。MA標準セットアップ、Merge Armature、個別パーツ、BlendShape Sync、最終NDMFビルド後のArmature統合結果は反映しません。
 
 ### 4. 個別パーツ
 
@@ -114,8 +118,9 @@ Assets/Setup Outfit Component/衣装セットアップ...
 - 出力名の衝突
 - 明示許可していない同一Prefabの重複配置
 
-バージョン0.1.1では、次の機能は対象外です。
+バージョン0.2.0では、次の機能は対象外です。
 
+- 適用プレビューでのMA標準セットアップ、Merge Armature、個別パーツ、BlendShape Sync、最終NDMFビルド結果の再現
 - BlendShapeのRemap Curve編集
 - MA Shape Changer、Material Swapの自動生成
 - 元PrefabのComponent／GameObject削除

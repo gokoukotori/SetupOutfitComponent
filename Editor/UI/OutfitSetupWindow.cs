@@ -65,6 +65,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
 
         internal void Initialize(GameObject sourcePrefab)
         {
+            OutfitApplyPreviewWindow.CloseForOwner(this);
             _sourcePrefab = sourcePrefab;
             _analysis = OutfitAnalyzer.Analyze(sourcePrefab);
             _plan = new OutfitSetupPlan(_analysis);
@@ -91,6 +92,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
         private void OnDisable()
         {
             EditorSceneManager.sceneSaved -= OnSceneSaved;
+            OutfitApplyPreviewWindow.CloseForOwner(this);
         }
 
         private void OnHierarchyChange()
@@ -104,6 +106,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             if (_plan == null) return;
             RefreshAvatars(false);
             RefreshSceneReferencesAfterChange();
+            UpdateApplyPreviewIfOpen();
             Repaint();
         }
 
@@ -116,6 +119,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
         {
             _blendshapeUiCache.InvalidateProject();
             InvalidateReviewValidation();
+            UpdateApplyPreviewIfOpen();
             Repaint();
         }
 
@@ -124,6 +128,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             if (_plan == null) return;
             _blendshapeUiCache.InvalidateAvatar();
             RefreshSceneReferencesAfterChange();
+            UpdateApplyPreviewIfOpen();
             Repaint();
         }
 
@@ -213,6 +218,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             {
                 _placement = nextPlacement;
                 RefreshSceneReferencesAfterChange();
+                UpdateApplyPreviewIfOpen();
             }
 
             if (_selectedAvatar != null && _placement != null
@@ -233,7 +239,9 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             EditorGUILayout.LabelField("メニューと全体トグル", EditorStyles.boldLabel);
             _plan.SubmenuLabel = EditorGUILayout.TextField("SubMenu表示名", _plan.SubmenuLabel);
             _plan.MasterToggleLabel = EditorGUILayout.TextField("全体トグル表示名", _plan.MasterToggleLabel);
+            EditorGUI.BeginChangeCheck();
             _plan.MasterDefaultOn = EditorGUILayout.Toggle("初期ON", _plan.MasterDefaultOn);
+            if (EditorGUI.EndChangeCheck()) UpdateApplyPreviewIfOpen();
             EditorGUILayout.Space();
             EditorGUILayout.LabelField("衣装ON時に無効化するSceneオブジェクト", EditorStyles.boldLabel);
             DrawExclusionDropArea();
@@ -249,21 +257,35 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                     {
                         _exclusionObjects[index] = next;
                         RefreshSceneReferencesAfterChange();
+                        UpdateApplyPreviewIfOpen();
                     }
                     if (GUILayout.Button("削除", GUILayout.Width(52f)))
                     {
                         _exclusionObjects.RemoveAt(index);
                         RefreshSceneReferencesAfterChange();
+                        UpdateApplyPreviewIfOpen();
                         GUIUtility.ExitGUI();
                     }
                 }
             }
-            if (GUILayout.Button("対象を追加")) _exclusionObjects.Add(null);
+            if (GUILayout.Button("対象を追加"))
+            {
+                _exclusionObjects.Add(null);
+                UpdateApplyPreviewIfOpen();
+            }
             if (!string.IsNullOrEmpty(_exclusionDropMessage))
                 EditorGUILayout.HelpBox(_exclusionDropMessage, MessageType.Info);
             EditorGUILayout.HelpBox(
                 "全体トグルは「ON＝衣装を表示」です。上の対象は衣装ON時だけ非表示になります。Scene上の現在値は変更しません。",
                 MessageType.Info);
+            using (new EditorGUI.DisabledScope(!CanAttemptApplyPreview()))
+            {
+                if (GUILayout.Button("適用プレビューを開く", GUILayout.Height(30f)))
+                    OpenApplyPreview();
+            }
+            EditorGUILayout.HelpBox(
+                "専用SceneViewで衣装ON/OFFと排他対象の表示だけを確認します。MA装着処理、個別パーツ、BlendShape Sync、Armature統合結果は反映しません。",
+                MessageType.None);
             DrawLocalReferenceError();
         }
 
@@ -299,6 +321,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                     _exclusionObjects.AddRange(droppedObjects);
                     _exclusionDropMessage = droppedObjects.Count + "件の対象を追加しました。";
                     RefreshSceneReferencesAfterChange();
+                    UpdateApplyPreviewIfOpen();
                 }
                 else
                 {
@@ -871,6 +894,51 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             _placement = avatar != null ? avatar.transform : null;
             _exclusionObjects.Clear();
             RefreshSceneReferencesAfterChange();
+            UpdateApplyPreviewIfOpen();
+        }
+
+        private bool CanAttemptApplyPreview()
+        {
+            return _sourcePrefab != null
+                   && _analysis != null
+                   && _selectedAvatar != null
+                   && _placement != null
+                   && !EditorApplication.isPlayingOrWillChangePlaymode
+                   && PrefabStageUtility.GetCurrentPrefabStage() == null;
+        }
+
+        private bool TryCreateApplyPreviewRequest(
+            out OutfitPreviewRequest request,
+            out string error)
+        {
+            return OutfitPreviewRequest.TryCreate(
+                _sourcePrefab,
+                _selectedAvatar != null ? _selectedAvatar.gameObject : null,
+                _placement,
+                _exclusionObjects,
+                _analysis != null ? _analysis.DependencyHash : null,
+                _plan != null && _plan.MasterDefaultOn,
+                out request,
+                out error);
+        }
+
+        private void OpenApplyPreview()
+        {
+            if (TryCreateApplyPreviewRequest(out var request, out var error))
+            {
+                OutfitApplyPreviewWindow.OpenOrUpdate(this, request);
+                return;
+            }
+
+            EditorUtility.DisplayDialog("適用プレビューを開けません", error, "閉じる");
+        }
+
+        private void UpdateApplyPreviewIfOpen()
+        {
+            if (TryCreateApplyPreviewRequest(out var request, out var error))
+                OutfitApplyPreviewWindow.UpdateIfOpen(this, request);
+            else
+                OutfitApplyPreviewWindow.SetErrorIfOpen(this, error);
         }
 
         private void RefreshSceneReferencesAfterChange()

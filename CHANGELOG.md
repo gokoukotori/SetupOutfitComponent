@@ -2,6 +2,14 @@
 
 このパッケージの主な変更を記録します。
 
+## [0.2.0] - 2026-07-23
+
+- ステップ3から開ける、NDMFのカメラ別PreviewSessionを使った衣装適用プレビューを追加しました。
+- 専用SceneViewで衣装の全体ON/OFFと、衣装ON時に非表示にする排他対象を確認できるようにしました。
+- 元Scene、Prefab、Transform、Selection、Undo、通常のNDMFプレビュー設定を変更しないRender Mirror方式を採用しました。
+- Non-Destructive Modular Framework (NDMF) `>=1.14.1`を直接依存へ追加しました。
+- MA装着処理、個別パーツ、BlendShape Sync、最終NDMFビルド結果はプレビュー対象外であることを明記しました。
+
 ## [0.1.1] - 2026-07-23
 
 - BlendShape Sync画面のRenderer、Mesh、BlendShape候補をキャッシュし、再描画時の負荷を軽減しました。
