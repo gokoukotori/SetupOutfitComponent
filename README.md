@@ -19,7 +19,7 @@
 Packages/com.gokoukotori.setup-outfit-component
 ```
 
-配布用VPMリポジトリやGit URLからの導入は、バージョン0.2.1では提供していません。
+配布用VPMリポジトリやGit URLからの導入は、バージョン0.2.4では提供していません。
 
 ## 使い方
 
@@ -50,24 +50,43 @@ Assets/Setup Outfit Component/衣装セットアップ...
   - `MA標準セットアップを実行`: 常にModular Avatarの標準衣装セットアップを実行します。
   - `装着処理を行わない`: 小物などを想定し、配置とメニュー生成だけを行います。
 - SubMenu名、全体トグル名、初期ON/OFFを設定します。
-- 衣装ON時に非表示にする既存Sceneオブジェクトを指定します。Hierarchyで複数選択してドラッグ＆ドロップすることもできます。
-- `適用プレビューを開く`から専用SceneViewを開き、全体ON/OFFと排他対象の見え方を確認できます。
+- 衣装ON時に表示または非表示へ切り替える既存Sceneオブジェクトを指定します。Hierarchyで複数選択してドラッグ＆ドロップすることもでき、新規対象は現行互換の`非表示`で追加されます。
+- ここで指定したすべてのScene対象は、表示設定に関係なくステップ4で個別メニュー項目の候補としても選択できます。
+- `適用プレビューを開く`から専用SceneViewを開き、全体ON/OFFとScene表示設定の見え方を確認できます。
 
-全体トグルは`ON = 衣装を表示`です。指定した排他対象は衣装ON時に非表示になります。
+全体トグルは`ON = 衣装を表示`です。Scene対象は衣装ON時だけ指定した表示／非表示へ切り替わり、全体OFF時は元Sceneの`activeSelf`へ戻ります。
 
-適用プレビューはNDMFのカメラ別PreviewSessionを使用し、専用SceneViewだけへ適用されます。元Scene、Prefab、Transform、Selection、Undo、通常のSceneViewやNDMFプレビュー設定は変更しません。プレビュー対象は衣装全体、排他対象、個別パーツの表示状態です。MA標準セットアップ、Merge Armature、BlendShape Sync、最終NDMFビルド後のArmature統合結果は反映しません。
+適用プレビューはNDMFのカメラ別PreviewSessionを使用し、専用SceneViewだけへ適用されます。元Scene、Prefab、Transform、Selection、Undo、通常のSceneViewやNDMFプレビュー設定は変更しません。プレビュー対象は衣装全体、Scene表示対象、個別パーツの表示状態です。MA標準セットアップ、Merge Armature、BlendShape Sync、最終NDMFビルド後のArmature統合結果は反映しません。
+
+`表示`はGameObjectの`activeSelf`を有効化するため、対象に含まれるPhysBone、Constraintなども実際の生成結果では有効になり得ます。視覚プレビューは`MeshRenderer`／`SkinnedMeshRenderer`だけを対象とし、スクリプトの`OnEnable`やコンポーネントの実動作は再現しません。`Renderer.enabled=false`のRendererや、非表示の祖先の下にあるRendererは表示設定でも描画されません。
 
 ### 4. 個別パーツ
 
-- 衣装Prefab内のRenderer GameObject、または任意のGameObjectを個別メニュー項目へまとめます。
-- 各ターゲットについて、メニューON時に表示するか非表示にするかを指定します。
-- 新しいターゲットのON時状態は既定で非表示です。
-- メニュー初期状態はPrefabの`activeSelf`から自動判定するか、初期OFF／初期ONを明示できます。
-- 複数ターゲットの状態が混在し、自動判定できない場合は初期状態の明示が必要です。
-- `個別パーツプレビューを開く`から専用SceneViewを開き、各項目を`メニューON`／`メニューOFF`へ切り替えて見え方を確認できます。ステップ4から開いた場合、衣装全体はプレビュー内だけONで開始します。全体OFFでは衣装全体が非表示になり、全体ONへ戻すと選択中の個別状態が再び反映されます。
-- プレビュー開始時はウィザードで設定した各項目の初期状態を使用します。`個別項目を初期状態に戻す`で全項目をその状態へ戻せます。
-- 初期状態を自動判定できない項目もプレビュー上では仮にOFFから確認できますが、Scene生成前には従来どおり初期OFFまたは初期ONを明示する必要があります。
-- プレビューウィンドウ内で切り替えた個別状態は確認用の一時状態です。ウィザードのメニュー初期状態、生成計画、元Prefab、Sceneには書き戻しません。
+- 衣装Prefab内のRenderer GameObject、任意のGameObject、またはステップ3のScene表示対象を個別メニュー項目へまとめます。
+- RendererをScene対象として指定した場合も、Componentではなく所属GameObjectの`activeSelf`を制御します。
+- 各ターゲットについて、メニューON時に表示するか非表示にするかを指定します。個別項目OFF時は対象へ値を適用しません。
+- 同じPrefab／Sceneターゲットを複数の個別項目へ指定できます。同時にONの場合は、メニューで最も下にある項目を優先します。
+- 項目はウィザードに表示された上から下の順でメニューへ生成されます。▲／▼ボタンまたは左端のハンドルのドラッグ＆ドロップで並べ替えられ、新しい項目は末尾へ追加されます。
+- 新しいPrefabターゲットのON時状態は既定で`非表示`、ステップ3のScene対象を個別項目へ追加したときは既定で`表示`です。どちらも対象行で変更できます。
+- メニュー初期状態の`自動（OFF）`は常に初期OFFとして生成します。必要な項目だけ初期ONを明示できます。
+- `個別パーツプレビューを開く`から専用SceneViewを開き、各項目を`メニューON`／`メニューOFF`へ切り替えて見え方を確認できます。ステップ4から開いた場合、衣装全体はプレビュー内だけONで開始します。
+- プレビュー内の一時ON/OFFは項目IDごとに保持されるため、表示名や並び順を変更しても維持されます。`個別項目を初期状態に戻す`で全項目をウィザードの初期状態へ戻せます。
+- プレビューウィンドウ内の操作は、ウィザードの初期状態、生成計画、元Prefab、Sceneへ書き戻しません。
+- `Prefab内ターゲット`でチェックした対象は、専用SceneView上のワイヤー枠とPrefabルートからの相対パスで確認できます。対象自身またはその子孫にある、現在表示中のRendererだけが枠表示されます。
+- ターゲットのチェック操作だけではプレビューを自動起動しません。先に`個別パーツプレビューを開く`を実行すると、その後のチェック変更が開いているプレビューへ反映されます。
+- チェック対象は確認用の一時選択であり、個別メニュー項目の対象や生成計画には追加されません。
+
+同じ対象を複数の項目で制御する場合は、次のメニュー順規則を使用します。
+
+| 衣装全体 | 同じ対象を制御する個別項目 | 適用する状態 |
+|---|---|---|
+| OFF | OFF／ON | Prefab側は衣装全体を非表示、Scene側は元Sceneの状態 |
+| ON | 全項目OFF | Prefab側はPrefabに保存された`activeSelf`、Scene側はステップ3の表示設定 |
+| ON | 1件以上ON | ON中でメニューの最も下にある項目の`ActiveWhenOn` |
+
+親子のScene対象を同時に指定できますが、非表示の祖先の下にある対象は`表示`を指定しても描画されません。同じScene対象を既存のMA Object Toggleも制御している場合は警告を表示しますが、意図した併用を許可するため生成はブロックしません。メニュー順による勝者保証は、このウィザードが生成した個別項目同士に限ります。外部のMA Object Toggleを含む最終状態はModular AvatarのHierarchy優先規則に従うため、確認画面と最終ビルド結果を確認してください。
+
+個別パーツプレビューはPrefab／Scene対象のメニュー順判定、全体ON/OFF、個別メニューON/OFF、チェック対象のワイヤー枠と階層パスを反映します。表示対象は`MeshRenderer`／`SkinnedMeshRenderer`です。Animator遷移、MAの1フレーム遅延、Particle、PhysBone、Constraint、外部MA／NDMFとの競合、MA標準セットアップ、Merge Armature、BlendShape Sync、最終NDMFビルド結果は反映しません。
 
 ### 5. BlendShape Sync
 
@@ -94,15 +113,19 @@ Assets/Setup Outfit Component/衣装セットアップ...
    ├─ <全体トグル>             MA Menu Item + MA Object Toggle
    └─ <元Prefab instance>       Prefab接続を維持 + MA Menu Group
       └─ メニュー               MA Menu Group
-         └─ <個別項目>          MA Menu Item + MA Object Toggle
+         ├─ <個別項目A>         MA Menu Item + MA Object Toggle
+         └─ <個別項目B>         MA Menu Item + MA Object Toggle（下側ほど優先）
 ```
 
-個別項目がない場合、Prefabインスタンス上のMenu Groupと`メニュー`階層は生成されません。BlendShape Syncを設定した場合は、対象となる衣装RendererのGameObjectへMA Blendshape Syncが追加されます。
+個別項目がない場合、Prefabインスタンス上のMenu Groupと`メニュー`階層は生成されません。個別項目はウィザードと同じ上から下の順で生成され、同じ対象を制御するON項目では下側の項目が優先されます。個別項目OFF用の補助GameObjectやObject Toggleは生成しません。
+
+BlendShape Syncを設定した場合は、対象となる衣装RendererのGameObjectへMA Blendshape Syncが追加されます。
 
 ## 非破壊動作とUndo
 
 - 元Prefab、Prefab Variant、依存アセットを変更しません。
 - 元PrefabインスタンスのPosition、Rotation、Scaleを`0`や`1`へ補正せず、Prefabが持つTransformを維持します。
+- ステップ3または個別項目へ追加したScene対象の`activeSelf`、`Renderer.enabled`、Transform、親子関係を変更しません。
 - 生成物はSceneだけに作成し、新規Prefabとして保存しません。
 - Sceneを自動保存しません。
 - Prefab接続と必要なPrefab Overrideを維持します。
@@ -118,11 +141,11 @@ Assets/Setup Outfit Component/衣装セットアップ...
 - 複数Prefab、FBX、PSDの入力
 - AvatarDescriptorまたはMissing Scriptを含む衣装Prefab
 - 対象アバター外の配置先や参照先
-- 重複ターゲット、個別パーツ間の祖先・子孫競合、未解決の初期状態
+- 同一項目内の重複ターゲット、個別パーツの祖先・子孫競合、未解決の参照
 - 出力名の衝突
 - 明示許可していない同一Prefabの重複配置
 
-バージョン0.2.1では、次の機能は対象外です。
+バージョン0.2.4では、次の機能は対象外です。
 
 - 適用プレビューでのMA標準セットアップ、Merge Armature、BlendShape Sync、最終NDMFビルド結果の再現
 - BlendShapeのRemap Curve編集

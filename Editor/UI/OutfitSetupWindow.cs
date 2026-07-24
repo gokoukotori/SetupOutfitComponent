@@ -24,13 +24,16 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
 
         private static readonly string[] PartInitialStateLabels =
         {
-            "Prefab状態から自動", "初期OFF", "初期ON",
+            "自動（OFF）", "初期OFF", "初期ON",
         };
 
         private static readonly string[] TargetOnStateLabels =
         {
             "表示", "非表示",
         };
+
+        private const string PartDragDataKey =
+            "Gokoukotori.SetupOutfitComponent.PartToggleItemId";
 
         private OutfitAnalysis _analysis;
         private OutfitSetupPlan _plan;
@@ -40,8 +43,11 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
         private readonly List<VRCAvatarDescriptor> _avatars = new List<VRCAvatarDescriptor>();
         private VRCAvatarDescriptor _selectedAvatar;
         private Transform _placement;
-        private readonly List<GameObject> _exclusionObjects = new List<GameObject>();
-        private readonly HashSet<PrefabTargetKey> _selectedPartTargets = new HashSet<PrefabTargetKey>();
+        private readonly List<MasterSceneTargetRow> _sceneTargetRows = new List<MasterSceneTargetRow>();
+        private readonly Dictionary<string, PartToggleTargetPlan> _selectedPartTargets =
+            new Dictionary<string, PartToggleTargetPlan>(StringComparer.Ordinal);
+        private readonly Dictionary<int, SceneObjectReference> _sceneTargetReferencesByInstanceId =
+            new Dictionary<int, SceneObjectReference>();
         private readonly Dictionary<PrefabTargetKey, SkinnedMeshRenderer> _blendshapeSourceRenderers =
             new Dictionary<PrefabTargetKey, SkinnedMeshRenderer>();
         private readonly BlendshapeUiCache _blendshapeUiCache = new BlendshapeUiCache();
@@ -51,8 +57,20 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             new ReviewValidationCache();
         private bool _showAllPrefabObjects;
         private string _localReferenceError;
-        private string _exclusionDropMessage;
+        private string _sceneTargetDropMessage;
+        private string _pendingPartDragItemId;
 
+        internal sealed class MasterSceneTargetRow
+        {
+            internal MasterSceneTargetRow(GameObject target, bool activeWhenOn)
+            {
+                Target = target;
+                ActiveWhenOn = activeWhenOn;
+            }
+
+            internal GameObject Target { get; set; }
+            internal bool ActiveWhenOn { get; set; }
+        }
         internal BlendshapeUiCache BlendshapeUiCacheForTests => _blendshapeUiCache;
 
         internal static void Open(GameObject sourcePrefab)
@@ -73,10 +91,11 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             _step = 0;
             _scrollPosition = Vector2.zero;
             _selectedPartTargets.Clear();
+            _sceneTargetReferencesByInstanceId.Clear();
             _blendshapeSourceRenderers.Clear();
-            _exclusionObjects.Clear();
+            _sceneTargetRows.Clear();
             _localReferenceError = null;
-            _exclusionDropMessage = null;
+            _sceneTargetDropMessage = null;
             _sceneReferenceRefreshGate.Invalidate();
             InvalidateReviewValidation();
             RefreshAvatars(true);
@@ -107,6 +126,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             RefreshAvatars(false);
             RefreshSceneReferencesAfterChange();
             UpdateApplyPreviewIfOpen();
+            OutfitApplyPreviewWindow.RefreshHighlightedTargetsIfOpen(this);
             Repaint();
         }
 
@@ -243,25 +263,40 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             _plan.MasterDefaultOn = EditorGUILayout.Toggle("初期ON", _plan.MasterDefaultOn);
             if (EditorGUI.EndChangeCheck()) UpdateApplyPreviewIfOpen();
             EditorGUILayout.Space();
-            EditorGUILayout.LabelField("衣装ON時に無効化するSceneオブジェクト", EditorStyles.boldLabel);
-            DrawExclusionDropArea();
+            EditorGUILayout.LabelField("衣装ON時のScene表示設定", EditorStyles.boldLabel);
+            DrawSceneTargetDropArea();
 
-            for (var index = 0; index < _exclusionObjects.Count; index++)
+            for (var index = 0; index < _sceneTargetRows.Count; index++)
             {
+                var row = _sceneTargetRows[index];
                 using (new EditorGUILayout.HorizontalScope())
                 {
                     EditorGUI.BeginChangeCheck();
-                    var next = (GameObject)EditorGUILayout.ObjectField(
-                        "対象 " + (index + 1), _exclusionObjects[index], typeof(GameObject), true);
+                    var nextTarget = (GameObject)EditorGUILayout.ObjectField(
+                        "対象 " + (index + 1), row.Target, typeof(GameObject), true);
                     if (EditorGUI.EndChangeCheck())
                     {
-                        _exclusionObjects[index] = next;
+                        row.Target = nextTarget;
                         RefreshSceneReferencesAfterChange();
                         UpdateApplyPreviewIfOpen();
                     }
+
+                    EditorGUILayout.LabelField("ON時", GUILayout.Width(34f));
+                    var nextState = EditorGUILayout.Popup(
+                        row.ActiveWhenOn ? 0 : 1,
+                        TargetOnStateLabels,
+                        GUILayout.Width(80f));
+                    var nextActiveWhenOn = nextState == 0;
+                    if (nextActiveWhenOn != row.ActiveWhenOn)
+                    {
+                        row.ActiveWhenOn = nextActiveWhenOn;
+                        RefreshSceneReferencesAfterChange();
+                        UpdateApplyPreviewIfOpen();
+                    }
+
                     if (GUILayout.Button("削除", GUILayout.Width(52f)))
                     {
-                        _exclusionObjects.RemoveAt(index);
+                        _sceneTargetRows.RemoveAt(index);
                         RefreshSceneReferencesAfterChange();
                         UpdateApplyPreviewIfOpen();
                         GUIUtility.ExitGUI();
@@ -270,13 +305,14 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             }
             if (GUILayout.Button("対象を追加"))
             {
-                _exclusionObjects.Add(null);
+                _sceneTargetRows.Add(new MasterSceneTargetRow(null, false));
+                RefreshSceneReferencesAfterChange();
                 UpdateApplyPreviewIfOpen();
             }
-            if (!string.IsNullOrEmpty(_exclusionDropMessage))
-                EditorGUILayout.HelpBox(_exclusionDropMessage, MessageType.Info);
+            if (!string.IsNullOrEmpty(_sceneTargetDropMessage))
+                EditorGUILayout.HelpBox(_sceneTargetDropMessage, MessageType.Info);
             EditorGUILayout.HelpBox(
-                "全体トグルは「ON＝衣装を表示」です。上の対象は衣装ON時だけ非表示になります。Scene上の現在値は変更しません。",
+                "全体トグルは「ON＝衣装を表示」です。Scene対象は衣装ON時だけ指定した表示／非表示へ切り替わり、全体OFF時は元Sceneの状態へ戻ります。Scene上の現在値は変更しません。",
                 MessageType.Info);
             using (new EditorGUI.DisabledScope(!CanAttemptApplyPreview()))
             {
@@ -284,12 +320,12 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                     OpenApplyPreview();
             }
             EditorGUILayout.HelpBox(
-                "専用SceneViewで衣装ON/OFFと排他対象の表示だけを確認します。MA装着処理、個別パーツ、BlendShape Sync、Armature統合結果は反映しません。",
+                "専用SceneViewで衣装ON/OFF、Scene表示設定、個別パーツの見え方を確認します。MA装着処理、BlendShape Sync、Armature統合結果は反映しません。",
                 MessageType.None);
             DrawLocalReferenceError();
         }
 
-        private void DrawExclusionDropArea()
+        private void DrawSceneTargetDropArea()
         {
             var style = new GUIStyle(EditorStyles.helpBox)
             {
@@ -306,30 +342,39 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                 return;
             }
 
-            var droppedObjects = CollectDroppedSceneObjects(
+            var droppedRows = CreateDroppedMasterSceneTargetRows(
                 DragAndDrop.objectReferences,
-                _exclusionObjects);
-            DragAndDrop.visualMode = droppedObjects.Count > 0
+                _sceneTargetRows.Select(row => row.Target));
+            DragAndDrop.visualMode = droppedRows.Count > 0
                 ? DragAndDropVisualMode.Copy
                 : DragAndDropVisualMode.Rejected;
 
             if (currentEvent.type == EventType.DragPerform)
             {
                 DragAndDrop.AcceptDrag();
-                if (droppedObjects.Count > 0)
+                if (droppedRows.Count > 0)
                 {
-                    _exclusionObjects.AddRange(droppedObjects);
-                    _exclusionDropMessage = droppedObjects.Count + "件の対象を追加しました。";
+                    _sceneTargetRows.AddRange(droppedRows);
+                    _sceneTargetDropMessage = droppedRows.Count + "件のScene対象を非表示設定で追加しました。";
                     RefreshSceneReferencesAfterChange();
                     UpdateApplyPreviewIfOpen();
                 }
                 else
                 {
-                    _exclusionDropMessage = "追加できる新しいSceneオブジェクトがありませんでした。";
+                    _sceneTargetDropMessage = "追加できる新しいSceneオブジェクトがありませんでした。";
                 }
             }
 
             currentEvent.Use();
+        }
+
+        internal static IReadOnlyList<MasterSceneTargetRow> CreateDroppedMasterSceneTargetRows(
+            IEnumerable<UnityEngine.Object> droppedObjects,
+            IEnumerable<GameObject> existingObjects)
+        {
+            return CollectDroppedSceneObjects(droppedObjects, existingObjects)
+                .Select(target => new MasterSceneTargetRow(target, false))
+                .ToArray();
         }
 
         internal static IReadOnlyList<GameObject> CollectDroppedSceneObjects(
@@ -368,7 +413,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
         {
             EditorGUILayout.LabelField("個別メニュー項目", EditorStyles.boldLabel);
             EditorGUILayout.HelpBox(
-                "1つ以上のPrefab内GameObjectを1つのトグル項目へまとめ、対象ごとにメニューON時の表示／非表示を指定できます。",
+                "Prefab内GameObjectとステップ3のScene対象を1つのトグル項目へまとめ、対象ごとにメニューON時の表示／非表示を指定できます。同じ対象を複数項目へ追加した場合は、メニューで下側にあるON項目を優先します。",
                 MessageType.Info);
             using (new EditorGUI.DisabledScope(!CanAttemptApplyPreview()))
             {
@@ -390,16 +435,51 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             {
                 if (target.TargetKey.IsRoot) continue;
                 if (!_showAllPrefabObjects && !target.IsRendererCandidate) continue;
-                var selected = _selectedPartTargets.Contains(target.TargetKey);
+                var selection = PartToggleTargetPlan.ForPrefab(target.TargetKey);
+                var selected = _selectedPartTargets.ContainsKey(selection.StableId);
                 var label = new string(' ', Mathf.Min(target.Depth, 12) * 2) + target.Name
                             + (target.IsRendererCandidate ? "  [Renderer]" : string.Empty)
                             + (target.ActiveSelf ? string.Empty : "  [初期OFF]");
                 var next = EditorGUILayout.ToggleLeft(label, selected);
                 if (next != selected)
                 {
-                    if (next) _selectedPartTargets.Add(target.TargetKey);
-                    else _selectedPartTargets.Remove(target.TargetKey);
+                    if (next) _selectedPartTargets[selection.StableId] = selection;
+                    else _selectedPartTargets.Remove(selection.StableId);
+                    NotifyHighlightedPartTargetsChanged();
                 }
+            }
+
+            EditorGUILayout.Space(6f);
+            EditorGUILayout.LabelField("ステップ3のScene対象", EditorStyles.miniBoldLabel);
+            if (_sceneTargetRows.All(row => row.Target == null))
+            {
+                EditorGUILayout.HelpBox(
+                    "ステップ3でScene表示対象を指定すると候補に表示されます。",
+                    MessageType.None);
+            }
+            foreach (var row in _sceneTargetRows.Where(row => row.Target != null))
+            {
+                var sceneTarget = row.Target;
+                if (!_sceneTargetReferencesByInstanceId.TryGetValue(
+                        sceneTarget.GetInstanceID(),
+                        out var sceneReference))
+                {
+                    EditorGUILayout.LabelField(sceneTarget.name + "  [Scene/参照未解決]");
+                    continue;
+                }
+
+                var selection = PartToggleTargetPlan.ForScene(sceneReference);
+                var selected = _selectedPartTargets.ContainsKey(selection.StableId);
+                var label = sceneReference.DisplayName
+                            + (row.ActiveWhenOn
+                                ? "  [Scene/全体ON時に表示]"
+                                : "  [Scene/全体ON時に非表示]")
+                            + (sceneTarget.activeSelf ? string.Empty : "  [現在OFF]");
+                var next = EditorGUILayout.ToggleLeft(label, selected);
+                if (next == selected) continue;
+                if (next) _selectedPartTargets[selection.StableId] = selection;
+                else _selectedPartTargets.Remove(selection.StableId);
+                NotifyHighlightedPartTargetsChanged();
             }
             using (new EditorGUI.DisabledScope(_selectedPartTargets.Count == 0))
             {
@@ -419,45 +499,78 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                 return;
             }
 
-            for (var index = 0; index < _plan.PartToggles.Count; index++)
+            EditorGUILayout.HelpBox(
+                "上から下の順にメニューへ生成します。同じ対象を共有する項目が同時にONの場合は、下側の項目を優先します。▲／▼または左端のハンドルのドラッグで並べ替えられます。",
+                MessageType.None);
+            for (var partIndex = 0; partIndex < _plan.PartToggles.Count; partIndex++)
             {
-                var part = _plan.PartToggles[index];
+                DrawPartReorderDropZone(partIndex);
+                var part = _plan.PartToggles[partIndex];
                 using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
                 {
                     using (new EditorGUILayout.HorizontalScope())
                     {
+                        DrawPartDragHandle(part);
+                        using (new EditorGUI.DisabledScope(partIndex <= 0))
+                        {
+                            if (GUILayout.Button("▲", GUILayout.Width(28f)))
+                            {
+                                MovePartToggle(_plan.PartToggles, part.ItemId, partIndex - 1);
+                                OnPartOrderChanged();
+                                GUIUtility.ExitGUI();
+                            }
+                        }
+                        using (new EditorGUI.DisabledScope(partIndex >= _plan.PartToggles.Count - 1))
+                        {
+                            if (GUILayout.Button("▼", GUILayout.Width(28f)))
+                            {
+                                MovePartToggle(_plan.PartToggles, part.ItemId, partIndex + 1);
+                                OnPartOrderChanged();
+                                GUIUtility.ExitGUI();
+                            }
+                        }
                         EditorGUI.BeginChangeCheck();
                         var nextLabel = EditorGUILayout.TextField("表示名", part.Label);
                         if (EditorGUI.EndChangeCheck())
                         {
                             part.Label = nextLabel;
                             UpdateApplyPreviewIfOpen();
+                            InvalidateReviewValidation();
                         }
                         if (GUILayout.Button("削除", GUILayout.Width(52f)))
                         {
-                            _plan.PartToggles.RemoveAt(index);
+                            _plan.PartToggles.Remove(part);
                             UpdateApplyPreviewIfOpen();
+                            InvalidateReviewValidation();
                             GUIUtility.ExitGUI();
                         }
                     }
                     EditorGUILayout.LabelField("ターゲットごとのメニューON時の状態", EditorStyles.miniBoldLabel);
-                    foreach (var targetKey in part.Targets)
+                    for (var targetIndex = 0; targetIndex < part.Targets.Count; targetIndex++)
                     {
+                        var targetPlan = part.Targets[targetIndex];
                         using (new EditorGUILayout.HorizontalScope())
                         {
-                            var target = _analysis.FindTarget(targetKey);
-                            EditorGUILayout.LabelField(target?.DisplayPath ?? "<未解決>");
+                            EditorGUILayout.LabelField(GetPartTargetDisplayName(targetPlan));
                             EditorGUILayout.LabelField("ON時", GUILayout.Width(34f));
-                            var activeWhenOn = part.GetTargetActiveWhenOn(targetKey);
+                            var activeWhenOn = targetPlan?.ActiveWhenOn == true;
                             var nextState = EditorGUILayout.Popup(
                                 activeWhenOn ? 0 : 1,
                                 TargetOnStateLabels,
                                 GUILayout.Width(80f));
                             var nextActiveWhenOn = nextState == 0;
-                            if (nextActiveWhenOn != activeWhenOn)
+                            if (targetPlan != null && nextActiveWhenOn != activeWhenOn)
                             {
-                                part.SetTargetActiveWhenOn(targetKey, nextActiveWhenOn);
+                                targetPlan.ActiveWhenOn = nextActiveWhenOn;
                                 UpdateApplyPreviewIfOpen();
+                                InvalidateReviewValidation();
+                            }
+                            if (GUILayout.Button("削除", GUILayout.Width(52f)))
+                            {
+                                part.Targets.RemoveAt(targetIndex);
+                                UpdateApplyPreviewIfOpen();
+                                InvalidateReviewValidation();
+                                GUIUtility.ExitGUI();
                             }
                         }
                     }
@@ -471,24 +584,139 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                     {
                         part.InitialOn = nextInitialState == 0 ? (bool?)null : nextInitialState == 2;
                         UpdateApplyPreviewIfOpen();
-                    }
-
-                    if (!part.InitialOn.HasValue && part.TryGetEffectiveInitialOn(_analysis, out var inherited))
-                    {
-                        EditorGUILayout.LabelField(
-                            "自動判定",
-                            inherited ? "ON（Prefab状態とON時設定から判定）" : "OFF（Prefab状態とON時設定から判定）");
-                    }
-                    else if (!part.InitialOn.HasValue)
-                    {
-                        EditorGUILayout.HelpBox(
-                            "Prefab状態とON時設定から初期状態を一意に決められません。初期OFFまたは初期ONを選択してください。",
-                            MessageType.Error);
+                        InvalidateReviewValidation();
                     }
                 }
             }
+            DrawPartReorderDropZone(_plan.PartToggles.Count);
         }
 
+        private void DrawPartDragHandle(PartTogglePlan part)
+        {
+            var handleContent = new GUIContent("≡", "ドラッグしてメニュー順を変更");
+            var handleRect = GUILayoutUtility.GetRect(
+                handleContent,
+                EditorStyles.miniButton,
+                GUILayout.Width(28f));
+            GUI.Label(handleRect, handleContent, EditorStyles.miniButton);
+
+            var currentEvent = Event.current;
+            if (currentEvent.type == EventType.MouseDown
+                && currentEvent.button == 0
+                && handleRect.Contains(currentEvent.mousePosition))
+            {
+                _pendingPartDragItemId = part.ItemId;
+                currentEvent.Use();
+                return;
+            }
+
+            if (currentEvent.type == EventType.MouseDrag
+                && string.Equals(_pendingPartDragItemId, part.ItemId, StringComparison.Ordinal))
+            {
+                DragAndDrop.PrepareStartDrag();
+                DragAndDrop.SetGenericData(PartDragDataKey, part.ItemId);
+                DragAndDrop.objectReferences = Array.Empty<UnityEngine.Object>();
+                DragAndDrop.StartDrag("個別メニュー項目を並べ替え");
+                _pendingPartDragItemId = null;
+                currentEvent.Use();
+                return;
+            }
+
+            if (currentEvent.rawType == EventType.MouseUp
+                && string.Equals(_pendingPartDragItemId, part.ItemId, StringComparison.Ordinal))
+            {
+                _pendingPartDragItemId = null;
+            }
+        }
+
+        private void DrawPartReorderDropZone(int insertionIndex)
+        {
+            var dropRect = GUILayoutUtility.GetRect(0f, 8f, GUILayout.ExpandWidth(true));
+            var draggedItemId = DragAndDrop.GetGenericData(PartDragDataKey) as string;
+            if (string.IsNullOrEmpty(draggedItemId)) return;
+
+            var currentEvent = Event.current;
+            if (!dropRect.Contains(currentEvent.mousePosition)
+                || (currentEvent.type != EventType.DragUpdated
+                    && currentEvent.type != EventType.DragPerform))
+            {
+                return;
+            }
+
+            DragAndDrop.visualMode = DragAndDropVisualMode.Move;
+            EditorGUI.DrawRect(dropRect, new Color(0.2f, 0.55f, 1f, 0.65f));
+            if (currentEvent.type == EventType.DragPerform)
+            {
+                DragAndDrop.AcceptDrag();
+                var moved = MovePartToggleAtInsertionIndex(
+                    _plan.PartToggles,
+                    draggedItemId,
+                    insertionIndex);
+                DragAndDrop.SetGenericData(PartDragDataKey, null);
+                _pendingPartDragItemId = null;
+                if (moved)
+                {
+                    OnPartOrderChanged();
+                    currentEvent.Use();
+                    GUIUtility.ExitGUI();
+                }
+            }
+
+            currentEvent.Use();
+        }
+
+        private void OnPartOrderChanged()
+        {
+            UpdateApplyPreviewIfOpen();
+            InvalidateReviewValidation();
+            Repaint();
+        }
+
+        internal static bool MovePartToggle(
+            IList<PartTogglePlan> parts,
+            string itemId,
+            int targetIndex)
+        {
+            if (parts == null || string.IsNullOrEmpty(itemId) || parts.Count == 0)
+                return false;
+
+            var sourceIndex = FindPartToggleIndex(parts, itemId);
+            if (sourceIndex < 0) return false;
+            var normalizedTargetIndex = Mathf.Clamp(targetIndex, 0, parts.Count - 1);
+            if (sourceIndex == normalizedTargetIndex) return false;
+
+            var part = parts[sourceIndex];
+            parts.RemoveAt(sourceIndex);
+            parts.Insert(normalizedTargetIndex, part);
+            return true;
+        }
+
+        internal static bool MovePartToggleAtInsertionIndex(
+            IList<PartTogglePlan> parts,
+            string itemId,
+            int insertionIndex)
+        {
+            if (parts == null || string.IsNullOrEmpty(itemId)) return false;
+
+            var sourceIndex = FindPartToggleIndex(parts, itemId);
+            if (sourceIndex < 0) return false;
+            var normalizedInsertionIndex = Mathf.Clamp(insertionIndex, 0, parts.Count);
+            var targetIndex = normalizedInsertionIndex > sourceIndex
+                ? normalizedInsertionIndex - 1
+                : normalizedInsertionIndex;
+            return MovePartToggle(parts, itemId, targetIndex);
+        }
+
+        private static int FindPartToggleIndex(IList<PartTogglePlan> parts, string itemId)
+        {
+            for (var index = 0; index < parts.Count; index++)
+            {
+                if (string.Equals(parts[index]?.ItemId, itemId, StringComparison.Ordinal))
+                    return index;
+            }
+
+            return -1;
+        }
         private void DrawBlendshapeStep()
         {
             EditorGUILayout.LabelField("MA Blendshape Sync", EditorStyles.boldLabel);
@@ -736,22 +964,44 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             EditorGUILayout.LabelField("Prefab", _analysis.AssetPath);
             EditorGUILayout.LabelField("Prefab接続", "維持（元Prefabインスタンスとして生成）");
             EditorGUILayout.LabelField("Scene保存", "行わない");
+            EditorGUILayout.LabelField(
+                "個別項目の競合解決",
+                "同じ対象では、メニューで最も下にあるON項目を適用");
+            EditorGUILayout.LabelField(
+                "表示／生成順",
+                "確認一覧と生成Hierarchyは上→下。下側ほど優先");
+            EditorGUILayout.LabelField(
+                "全項目OFF",
+                "Prefab対象は元のactiveSelf、Scene対象はステップ3の表示設定");
             EditorGUILayout.Space(4f);
             DrawHierarchyPreview();
             EditorGUILayout.Space(8f);
             EditorGUILayout.LabelField("参照とOverride", EditorStyles.boldLabel);
             EditorGUILayout.LabelField("全体ON", "衣装Prefabインスタンスを表示");
             EditorGUILayout.LabelField("基準状態", "衣装Prefabインスタンスを非表示（Prefab Overrideとして記録）");
-            if (_exclusionObjects.Count > 0)
-                EditorGUILayout.LabelField("排他対象", string.Join(", ", _exclusionObjects.Where(x => x != null).Select(x => x.name)));
-            foreach (var part in _plan.PartToggles)
+            if (_sceneTargetRows.Count > 0)
             {
-                foreach (var targetKey in part.Targets)
+                EditorGUILayout.LabelField("Scene表示設定", EditorStyles.miniBoldLabel);
+                foreach (var row in _sceneTargetRows)
                 {
-                    var target = _analysis.FindTarget(targetKey);
                     EditorGUILayout.LabelField(
-                        part.Label + " / " + (target?.DisplayPath ?? "<未解決>"),
-                        part.GetTargetActiveWhenOn(targetKey) ? "ON時に表示" : "ON時に非表示");
+                        row.Target != null ? row.Target.name : "<未指定>",
+                        row.ActiveWhenOn ? "衣装ON時に表示" : "衣装ON時に非表示");
+                }
+            }
+            EditorGUILayout.Space(4f);
+            EditorGUILayout.LabelField("個別項目（メニュー順・下側優先）", EditorStyles.miniBoldLabel);
+            for (var partIndex = 0; partIndex < _plan.PartToggles.Count; partIndex++)
+            {
+                var part = _plan.PartToggles[partIndex];
+                EditorGUILayout.LabelField(
+                    EmptyFallback(part.Label, "<個別項目>"),
+                    (partIndex + 1) + "番目");
+                foreach (var target in part.Targets)
+                {
+                    EditorGUILayout.LabelField(
+                        "  " + GetPartTargetDisplayName(target),
+                        target?.ActiveWhenOn == true ? "ON時に表示" : "ON時に非表示");
                 }
             }
 
@@ -818,10 +1068,14 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             EditorGUILayout.LabelField("       └─ " + _analysis.RootName + "  [Prefab instance]");
             if (_plan.PartToggles.Count <= 0) return;
             EditorGUILayout.LabelField("            └─ メニュー");
-            foreach (var part in _plan.PartToggles)
-                EditorGUILayout.LabelField("                 └─ " + EmptyFallback(part.Label, "<個別項目>"));
+            for (var partIndex = 0; partIndex < _plan.PartToggles.Count; partIndex++)
+            {
+                var part = _plan.PartToggles[partIndex];
+                var branch = partIndex == _plan.PartToggles.Count - 1 ? "└─ " : "├─ ";
+                EditorGUILayout.LabelField(
+                    "                 " + branch + EmptyFallback(part.Label, "<個別項目>"));
+            }
         }
-
         private void DrawNavigation()
         {
             EditorGUILayout.Space(4f);
@@ -867,7 +1121,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                            && string.IsNullOrEmpty(_localReferenceError);
                 case 3:
                     return _plan.PartToggles.All(part => !string.IsNullOrWhiteSpace(part.Label)
-                        && part.Targets.Count > 0 && part.TryGetEffectiveInitialOn(_analysis, out _));
+                        && part.Targets.Count > 0);
                 case 4:
                     return string.IsNullOrEmpty(_localReferenceError)
                            && _plan.BlendshapeSyncs.All(sync => sync.SourceRendererReference != null
@@ -916,7 +1170,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             }
             _selectedAvatar = avatar;
             _placement = avatar != null ? avatar.transform : null;
-            _exclusionObjects.Clear();
+            _sceneTargetRows.Clear();
             RefreshSceneReferencesAfterChange();
             UpdateApplyPreviewIfOpen();
         }
@@ -935,11 +1189,22 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             out OutfitPreviewRequest request,
             out string error)
         {
+            EnsureSceneReferencesCurrent();
+            if (!TryValidateMasterSceneTargetsForPreview(
+                    _sceneTargetRows,
+                    _plan.MasterSceneTargets,
+                    _localReferenceError,
+                    out error))
+            {
+                request = null;
+                return false;
+            }
+
             return OutfitPreviewRequest.TryCreate(
                 _sourcePrefab,
                 _selectedAvatar != null ? _selectedAvatar.gameObject : null,
                 _placement,
-                _exclusionObjects,
+                _plan.MasterSceneTargets,
                 _analysis != null ? _analysis.DependencyHash : null,
                 _plan != null && _plan.MasterDefaultOn,
                 _analysis,
@@ -948,11 +1213,40 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                 out error);
         }
 
+        internal static bool TryValidateMasterSceneTargetsForPreview(
+            IEnumerable<MasterSceneTargetRow> rows,
+            IEnumerable<MasterSceneTargetPlan> configuredTargets,
+            string localReferenceError,
+            out string error)
+        {
+            if (!string.IsNullOrEmpty(localReferenceError))
+            {
+                error = localReferenceError;
+                return false;
+            }
+
+            var rowArray = (rows ?? Enumerable.Empty<MasterSceneTargetRow>()).ToArray();
+            var targetArray = (configuredTargets ?? Enumerable.Empty<MasterSceneTargetPlan>())
+                .ToArray();
+            var validTargetCount = targetArray.Count(target => target?.Reference != null);
+            if (rowArray.Any(row => row?.Target == null)
+                || validTargetCount != rowArray.Length
+                || validTargetCount != targetArray.Length)
+            {
+                error = "Scene対象の参照をすべて解決できません。対象を再指定してください。";
+                return false;
+            }
+
+            error = null;
+            return true;
+        }
+
         private void OpenApplyPreview(bool forceOutfitOn = false)
         {
             if (TryCreateApplyPreviewRequest(out var request, out var error))
             {
                 OutfitApplyPreviewWindow.OpenOrUpdate(this, request, forceOutfitOn);
+                NotifyHighlightedPartTargetsChanged();
                 return;
             }
 
@@ -965,6 +1259,13 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                 OutfitApplyPreviewWindow.UpdateIfOpen(this, request);
             else
                 OutfitApplyPreviewWindow.SetErrorIfOpen(this, error);
+        }
+
+        private void NotifyHighlightedPartTargetsChanged()
+        {
+            OutfitApplyPreviewWindow.UpdateHighlightedTargetsIfOpen(
+                this,
+                _selectedPartTargets.Values);
         }
 
         private void RefreshSceneReferencesAfterChange()
@@ -983,17 +1284,24 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             _localReferenceError = null;
             _plan.AvatarReference = TryCreateSceneReference(_selectedAvatar != null ? _selectedAvatar.gameObject : null, "対象アバター");
             _plan.PlacementReference = TryCreateSceneReference(_placement != null ? _placement.gameObject : null, "配置Transform");
-            _plan.ExclusionTargets.Clear();
-            foreach (var exclusion in _exclusionObjects)
+            _plan.MasterSceneTargets.Clear();
+            _sceneTargetReferencesByInstanceId.Clear();
+            foreach (var row in _sceneTargetRows)
             {
-                if (exclusion == null)
+                if (row.Target == null)
                 {
-                    SetLocalReferenceError("排他対象に未指定の行があります。");
+                    SetLocalReferenceError("Scene対象に未指定の行があります。");
                     continue;
                 }
-                var reference = TryCreateSceneReference(exclusion, "排他対象 " + exclusion.name);
-                if (reference != null) _plan.ExclusionTargets.Add(reference);
+                var reference = TryCreateSceneReference(row.Target, "Scene対象 " + row.Target.name);
+                if (reference != null)
+                {
+                    _plan.MasterSceneTargets.Add(
+                        new MasterSceneTargetPlan(reference, row.ActiveWhenOn));
+                    _sceneTargetReferencesByInstanceId[row.Target.GetInstanceID()] = reference;
+                }
             }
+            PruneSelectedSceneTargets();
 
             foreach (var sync in _plan.BlendshapeSyncs)
             {
@@ -1055,23 +1363,93 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             var added = false;
             foreach (var candidate in _analysis.PartCandidates)
             {
-                if (_plan.PartToggles.Any(part => part.Targets.Contains(candidate.TargetKey))) continue;
-                _plan.PartToggles.Add(new PartTogglePlan(candidate.Name, new[] { candidate.TargetKey }));
+                var part = new PartTogglePlan(candidate.Name, new[] { candidate.TargetKey });
+                _plan.PartToggles.Add(part);
                 added = true;
             }
-            if (added) UpdateApplyPreviewIfOpen();
+            if (added)
+            {
+                UpdateApplyPreviewIfOpen();
+                InvalidateReviewValidation();
+            }
         }
 
         private void AddSelectedPartGroup()
         {
-            var targets = _selectedPartTargets.Select(key => _analysis.FindTarget(key)).Where(x => x != null)
-                .OrderBy(x => x.DisplayPath, StringComparer.Ordinal).ToArray();
+            var targets = _selectedPartTargets.Values
+                .Where(target => target != null)
+                .OrderBy(target => target.StableId, StringComparer.Ordinal)
+                .Select(ClonePartTarget)
+                .ToArray();
             if (targets.Length == 0) return;
-            _plan.PartToggles.Add(new PartTogglePlan(
-                targets.Length == 1 ? targets[0].Name : "パーツ",
-                targets.Select(target => target.TargetKey)));
+            var part = new PartTogglePlan(
+                targets.Length == 1 ? GetPartTargetShortName(targets[0]) : "パーツ",
+                targets);
+            _plan.PartToggles.Add(part);
             _selectedPartTargets.Clear();
             UpdateApplyPreviewIfOpen();
+            InvalidateReviewValidation();
+            NotifyHighlightedPartTargetsChanged();
+        }
+
+
+        private void PruneSelectedSceneTargets()
+        {
+            var currentSceneIds = new HashSet<string>(
+                _plan.MasterSceneTargets
+                    .Where(target => target?.Reference != null)
+                    .Select(target => target.Reference.GlobalObjectId),
+                StringComparer.Ordinal);
+            var removed = _selectedPartTargets
+                .Where(pair => pair.Value.Source == PartTargetSource.SceneObject
+                               && (pair.Value.SceneReference == null
+                                   || !currentSceneIds.Contains(
+                                       pair.Value.SceneReference.GlobalObjectId)))
+                .Select(pair => pair.Key)
+                .ToArray();
+            if (removed.Length == 0) return;
+            foreach (var stableId in removed) _selectedPartTargets.Remove(stableId);
+            NotifyHighlightedPartTargetsChanged();
+        }
+
+        private PartToggleTargetPlan ClonePartTarget(PartToggleTargetPlan target)
+        {
+            return target.Source == PartTargetSource.OutfitPrefab
+                ? PartToggleTargetPlan.ForPrefab(target.PrefabKey, target.ActiveWhenOn)
+                : PartToggleTargetPlan.ForScene(target.SceneReference, target.ActiveWhenOn);
+        }
+
+        private string GetPartTargetDisplayName(PartToggleTargetPlan target)
+        {
+            if (target == null) return "<未解決>";
+            if (target.Source == PartTargetSource.OutfitPrefab)
+                return _analysis.FindTarget(target.PrefabKey)?.DisplayPath ?? "<Prefab対象未解決>";
+
+            if (target.Source != PartTargetSource.SceneObject
+                || target.SceneReference == null)
+            {
+                return "<Scene対象未解決>";
+            }
+
+            var stillConfigured = _plan.MasterSceneTargets.Any(configuredTarget =>
+                configuredTarget?.Reference != null
+                && string.Equals(
+                    configuredTarget.Reference.GlobalObjectId,
+                    target.SceneReference.GlobalObjectId,
+                    StringComparison.Ordinal));
+            return target.SceneReference.DisplayName
+                   + (stillConfigured ? "  [Scene]" : "  [Scene/ステップ3から削除済み]");
+        }
+
+        private string GetPartTargetShortName(PartToggleTargetPlan target)
+        {
+            if (target.Source == PartTargetSource.OutfitPrefab)
+                return _analysis.FindTarget(target.PrefabKey)?.Name ?? "パーツ";
+
+            var displayName = target.SceneReference?.DisplayName;
+            if (string.IsNullOrEmpty(displayName)) return "パーツ";
+            var separator = displayName.LastIndexOf('/');
+            return separator >= 0 ? displayName.Substring(separator + 1) : displayName;
         }
 
         private void Generate()

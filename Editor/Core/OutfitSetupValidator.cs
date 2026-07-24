@@ -68,10 +68,10 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                 }
 
                 ValidateOutput(plan, avatar, placement, messages);
-                ValidateExclusions(plan, avatar, placement, messages);
+                ValidateMasterSceneTargets(plan, avatar, placement, messages);
             }
 
-            ValidateParts(plan, messages);
+            ValidateParts(plan, avatar, placement, messages);
             if (avatar != null)
             {
                 ValidateBlendshapeSyncs(plan, avatar, messages);
@@ -168,39 +168,98 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             }
         }
 
-        private static void ValidateExclusions(
+        private static void ValidateMasterSceneTargets(
             OutfitSetupPlan plan,
             GameObject avatar,
             GameObject placement,
             ICollection<ValidationMessage> messages)
         {
             var seen = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var reference in plan.ExclusionTargets)
+            var resolvedTargets = new Dictionary<GameObject, MasterSceneTargetPlan>();
+            foreach (var configuredTarget in plan.MasterSceneTargets)
             {
-                var target = ResolveSceneReference(reference, "排他対象", "EXCLUSION", messages);
+                if (configuredTarget == null)
+                {
+                    AddError(messages, "SCENE_TARGET_NULL", "Scene対象の設定が不正です。");
+                    continue;
+                }
+
+                var reference = configuredTarget.Reference;
+                var target = ResolveSceneReference(reference, "Scene対象", "SCENE_TARGET", messages);
                 if (target == null) continue;
 
                 if (!seen.Add(reference.GlobalObjectId))
                 {
-                    AddError(messages, "EXCLUSION_DUPLICATE", "同じ排他対象が複数回指定されています。");
+                    AddError(messages, "SCENE_TARGET_DUPLICATE", "同じScene対象が複数回指定されています。");
                 }
 
                 if (target == avatar || !target.transform.IsChildOf(avatar.transform))
                 {
-                    AddError(messages, "EXCLUSION_OUTSIDE_AVATAR", "排他対象は対象アバターの子孫である必要があります。");
+                    AddError(messages, "SCENE_TARGET_OUTSIDE_AVATAR",
+                        "Scene対象は対象アバターの子孫である必要があります。");
                 }
 
                 if (placement == target || placement.transform.IsChildOf(target.transform))
                 {
-                    AddError(messages, "EXCLUSION_CONTAINS_OUTPUT",
-                        "排他対象に配置先またはその祖先を指定することはできません。");
+                    AddError(messages, "SCENE_TARGET_CONTAINS_OUTPUT",
+                        "Scene対象に配置先またはその祖先を指定することはできません。");
+                }
+
+                resolvedTargets[target] = configuredTarget;
+            }
+
+            ValidateMasterSceneTargetVisibility(avatar, resolvedTargets, messages);
+        }
+
+        private static void ValidateMasterSceneTargetVisibility(
+            GameObject avatar,
+            IReadOnlyDictionary<GameObject, MasterSceneTargetPlan> configuredTargets,
+            ICollection<ValidationMessage> messages)
+        {
+            if (avatar == null) return;
+
+            foreach (var pair in configuredTargets)
+            {
+                if (pair.Key == null || pair.Value == null || !pair.Value.ActiveWhenOn) continue;
+
+                var ancestor = pair.Key.transform.parent;
+                while (ancestor != null)
+                {
+                    if (configuredTargets.TryGetValue(ancestor.gameObject, out var ancestorTarget))
+                    {
+                        if (!ancestorTarget.ActiveWhenOn)
+                        {
+                            AddWarning(messages, "SCENE_TARGET_HIDDEN_BY_MASTER_ANCESTOR",
+                                $"Scene対象「{pair.Key.name}」を表示にしても、非表示に設定された祖先「{ancestor.name}」のため表示されません。");
+                            break;
+                        }
+                    }
+                    else if (!ancestor.gameObject.activeSelf)
+                    {
+                        AddWarning(messages, "SCENE_TARGET_INACTIVE_ANCESTOR",
+                            $"Scene対象「{pair.Key.name}」を表示にしても、制御対象外の非アクティブな祖先「{ancestor.name}」のため表示されません。");
+                        break;
+                    }
+
+                    if (ancestor.gameObject == avatar) break;
+                    ancestor = ancestor.parent;
                 }
             }
         }
-
-        private static void ValidateParts(OutfitSetupPlan plan, ICollection<ValidationMessage> messages)
+        private static void ValidateParts(
+            OutfitSetupPlan plan,
+            GameObject avatar,
+            GameObject placement,
+            ICollection<ValidationMessage> messages)
         {
-            var allTargets = new List<PrefabTargetKey>();
+            var itemIds = new HashSet<string>(StringComparer.Ordinal);
+            var prefabTargets = new List<PrefabTargetKey>();
+            var sceneTargets = new List<GameObject>();
+            var masterSceneTargetIds = new HashSet<string>(
+                plan.MasterSceneTargets
+                    .Where(target => target?.Reference != null)
+                    .Select(target => target.Reference.GlobalObjectId),
+                StringComparer.Ordinal);
             for (var partIndex = 0; partIndex < plan.PartToggles.Count; partIndex++)
             {
                 var part = plan.PartToggles[partIndex];
@@ -208,6 +267,15 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                 {
                     AddError(messages, "PART_NULL", $"個別項目{partIndex + 1}が不正です。");
                     continue;
+                }
+
+                if (string.IsNullOrWhiteSpace(part.ItemId))
+                {
+                    AddError(messages, "PART_ITEM_ID", $"個別項目{partIndex + 1}の識別子がありません。");
+                }
+                else if (!itemIds.Add(part.ItemId))
+                {
+                    AddError(messages, "PART_ITEM_ID_DUPLICATE", "個別項目の識別子が重複しています。再作成してください。");
                 }
 
                 if (string.IsNullOrWhiteSpace(part.Label))
@@ -221,45 +289,172 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                     continue;
                 }
 
-                foreach (var key in part.Targets)
+                var partStableIds = new HashSet<string>(StringComparer.Ordinal);
+                foreach (var target in part.Targets)
                 {
-                    if (key.IsRoot)
+                    if (target == null || string.IsNullOrEmpty(target.StableId))
                     {
-                        AddError(messages, "PART_ROOT", "衣装Prefabのルート自体は個別パーツに指定できません。");
+                        AddError(messages, "PART_TARGET_INVALID",
+                            $"個別項目「{part.Label}」の対象が不正です。");
+                        continue;
                     }
 
-                    if (!string.Equals(key.DependencyHash, plan.DependencyHash, StringComparison.Ordinal)
-                        || key.Resolve(plan.SourcePrefab, plan.DependencyHash) == null
-                        || plan.Analysis.FindTarget(key) == null)
+                    var isFirstInPart = partStableIds.Add(target.StableId);
+                    if (!isFirstInPart)
                     {
-                        AddError(messages, "PART_STALE", $"個別項目「{part.Label}」の対象が解析時のPrefabと一致しません。");
+                        AddError(messages, "PART_TARGET_DUPLICATE",
+                            target.Source == PartTargetSource.OutfitPrefab
+                                ? "同じPrefab内オブジェクトが同一の個別項目へ複数回指定されています。"
+                                : "同じSceneオブジェクトが同一の個別項目へ複数回指定されています。");
                     }
 
-                    if (allTargets.Contains(key))
+                    if (target.Source == PartTargetSource.OutfitPrefab)
                     {
-                        AddError(messages, "PART_DUPLICATE_TARGET", "同じPrefab内オブジェクトが複数の個別項目に指定されています。");
+                        var key = target.PrefabKey;
+                        if (key.IsRoot)
+                        {
+                            AddError(messages, "PART_ROOT",
+                                "衣装Prefabのルート自体は個別パーツに指定できません。");
+                        }
+
+                        if (!string.Equals(
+                                key.DependencyHash,
+                                plan.DependencyHash,
+                                StringComparison.Ordinal)
+                            || key.Resolve(plan.SourcePrefab, plan.DependencyHash) == null
+                            || plan.Analysis.FindTarget(key) == null)
+                        {
+                            AddError(messages, "PART_STALE",
+                                $"個別項目「{part.Label}」の対象が解析時のPrefabと一致しません。");
+                        }
+
+                        if (isFirstInPart) prefabTargets.Add(key);
+                        continue;
                     }
 
-                    allTargets.Add(key);
+                    if (target.Source != PartTargetSource.SceneObject)
+                    {
+                        AddError(messages, "PART_TARGET_INVALID",
+                            $"個別項目「{part.Label}」の対象種別が不正です。");
+                        continue;
+                    }
+
+                    if (target.SceneReference == null
+                        || string.IsNullOrEmpty(target.SceneReference.GlobalObjectId))
+                    {
+                        AddError(messages, "PART_SCENE_REFERENCE_MISSING",
+                            $"個別項目「{part.Label}」のScene対象参照がありません。");
+                        continue;
+                    }
+
+                    if (!masterSceneTargetIds.Contains(target.SceneReference.GlobalObjectId))
+                    {
+                        AddError(messages, "PART_SCENE_NOT_IN_MASTER_TARGETS",
+                            $"個別項目「{part.Label}」のScene対象はステップ3のScene対象にも存在する必要があります。");
+                    }
+
+                    var sceneTarget = target.SceneReference.Resolve();
+                    if (sceneTarget == null
+                        || !sceneTarget.scene.IsValid()
+                        || !sceneTarget.scene.isLoaded
+                        || EditorUtility.IsPersistent(sceneTarget))
+                    {
+                        AddError(messages, "PART_SCENE_REFERENCE_UNRESOLVED",
+                            $"個別項目「{part.Label}」のScene対象をGlobalObjectIdから再解決できません。");
+                        continue;
+                    }
+
+                    if (avatar == null
+                        || (sceneTarget != avatar
+                            && !sceneTarget.transform.IsChildOf(avatar.transform)))
+                    {
+                        AddError(messages, "PART_SCENE_OUTSIDE_AVATAR",
+                            "個別パーツのScene対象は対象アバターの子孫である必要があります。");
+                    }
+                    else if (sceneTarget == avatar)
+                    {
+                        AddError(messages, "PART_SCENE_AVATAR_ROOT",
+                            "対象アバターのRootは個別パーツのScene対象に指定できません。");
+                    }
+
+                    if (placement != null
+                        && (placement == sceneTarget
+                            || placement.transform.IsChildOf(sceneTarget.transform)))
+                    {
+                        AddError(messages, "PART_SCENE_PLACEMENT_CONFLICT",
+                            "個別パーツのScene対象に配置先またはその祖先を指定できません。");
+                    }
+
+                    if (isFirstInPart) sceneTargets.Add(sceneTarget);
                 }
 
-                if (!part.TryGetEffectiveInitialOn(plan.Analysis, out _))
-                {
-                    AddError(messages, "PART_MIXED_INITIAL",
-                        $"個別項目「{part.Label}」はPrefab状態とON時設定から初期状態を一意に決められません。初期ON/OFFを指定してください。");
-                }
             }
 
-            for (var left = 0; left < allTargets.Count; left++)
+            var uniquePrefabTargets = prefabTargets.Distinct().ToArray();
+            for (var left = 0; left < uniquePrefabTargets.Length; left++)
             {
-                for (var right = left + 1; right < allTargets.Count; right++)
+                for (var right = left + 1; right < uniquePrefabTargets.Length; right++)
                 {
-                    if (allTargets[left].IsAncestorOf(allTargets[right])
-                        || allTargets[right].IsAncestorOf(allTargets[left]))
+                    if (uniquePrefabTargets[left].IsAncestorOf(uniquePrefabTargets[right])
+                        || uniquePrefabTargets[right].IsAncestorOf(uniquePrefabTargets[left]))
                     {
                         AddError(messages, "PART_ANCESTOR_CONFLICT",
                             "個別パーツの対象に祖先・子孫関係のあるGameObjectを同時指定できません。");
                     }
+                }
+            }
+
+            var uniqueSceneTargets = sceneTargets.Distinct().ToArray();
+            for (var left = 0; left < uniqueSceneTargets.Length; left++)
+            {
+                for (var right = left + 1; right < uniqueSceneTargets.Length; right++)
+                {
+                    if (!uniqueSceneTargets[left].transform.IsChildOf(uniqueSceneTargets[right].transform)
+                        && !uniqueSceneTargets[right].transform.IsChildOf(uniqueSceneTargets[left].transform))
+                    {
+                        continue;
+                    }
+
+                    AddError(messages, "PART_SCENE_ANCESTOR_CONFLICT",
+                        "個別パーツのScene対象に祖先・子孫関係のあるGameObjectを同時指定できません。");
+                }
+            }
+
+            var allSceneTargets = plan.MasterSceneTargets
+                .Where(target => target?.Reference != null)
+                .Select(target => target.Reference.Resolve())
+                .Where(target => target != null)
+                .Concat(uniqueSceneTargets)
+                .Distinct()
+                .ToArray();
+            ValidateExistingObjectToggleConflicts(avatar, allSceneTargets, messages);
+        }
+
+        private static void ValidateExistingObjectToggleConflicts(
+            GameObject avatar,
+            IReadOnlyList<GameObject> sceneTargets,
+            ICollection<ValidationMessage> messages)
+        {
+            if (avatar == null || sceneTargets.Count == 0) return;
+
+            foreach (var toggle in avatar.GetComponentsInChildren<ModularAvatarObjectToggle>(true))
+            {
+                if (toggle == null || toggle.Objects == null) continue;
+                foreach (var configured in toggle.Objects)
+                {
+                    var controlled = configured.Object?.Get(toggle);
+                    if (controlled == null) continue;
+                    if (!sceneTargets.Any(target =>
+                            target == controlled
+                            || target.transform.IsChildOf(controlled.transform)
+                            || controlled.transform.IsChildOf(target.transform)))
+                    {
+                        continue;
+                    }
+
+                    AddWarning(messages, "SCENE_TARGET_EXISTING_MA_CONFLICT",
+                        "Scene対象は既存のMA Object Toggleと同一または祖先・子孫関係で競合します。最終結果はHierarchy順に依存します。");
+                    return;
                 }
             }
         }

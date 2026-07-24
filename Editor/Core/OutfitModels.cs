@@ -150,60 +150,159 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
         internal List<BlendshapeMappingPlan> Mappings { get; } = new List<BlendshapeMappingPlan>();
     }
 
-    internal sealed class PartTogglePlan
+    internal enum PartTargetSource
     {
-        private readonly Dictionary<PrefabTargetKey, bool> _activeWhenOn =
-            new Dictionary<PrefabTargetKey, bool>();
+        OutfitPrefab,
+        SceneObject,
+    }
 
-        internal PartTogglePlan(string label, IEnumerable<PrefabTargetKey> targets, bool? initialOn = null)
+    internal sealed class MasterSceneTargetPlan
+    {
+        internal MasterSceneTargetPlan(
+            SceneObjectReference reference,
+            bool activeWhenOn = false)
         {
-            Label = label ?? string.Empty;
-            Targets = (targets ?? Enumerable.Empty<PrefabTargetKey>()).ToList();
-            InitialOn = initialOn;
-            foreach (var target in Targets) _activeWhenOn[target] = false;
+            Reference = reference;
+            ActiveWhenOn = activeWhenOn;
         }
 
+        internal SceneObjectReference Reference { get; }
+        internal bool ActiveWhenOn { get; set; }
+        internal string StableId =>
+            "S:" + (Reference?.GlobalObjectId ?? string.Empty);
+    }
+
+    internal sealed class PartToggleTargetPlan : IEquatable<PartToggleTargetPlan>
+    {
+        private PartToggleTargetPlan(
+            PartTargetSource source,
+            PrefabTargetKey prefabKey,
+            SceneObjectReference sceneReference,
+            bool activeWhenOn)
+        {
+            Source = source;
+            PrefabKey = prefabKey;
+            SceneReference = sceneReference;
+            ActiveWhenOn = activeWhenOn;
+        }
+
+        internal PartTargetSource Source { get; }
+        internal PrefabTargetKey PrefabKey { get; }
+        internal SceneObjectReference SceneReference { get; }
+        internal bool ActiveWhenOn { get; set; }
+        internal string StableId => Source == PartTargetSource.OutfitPrefab
+            ? "P:" + PrefabKey
+            : "S:" + (SceneReference?.GlobalObjectId ?? string.Empty);
+
+        internal static PartToggleTargetPlan ForPrefab(
+            PrefabTargetKey prefabKey,
+            bool activeWhenOn = false)
+        {
+            return new PartToggleTargetPlan(
+                PartTargetSource.OutfitPrefab,
+                prefabKey,
+                null,
+                activeWhenOn);
+        }
+
+        internal static PartToggleTargetPlan ForScene(
+            SceneObjectReference sceneReference,
+            bool activeWhenOn = true)
+        {
+            return new PartToggleTargetPlan(
+                PartTargetSource.SceneObject,
+                default,
+                sceneReference ?? throw new ArgumentNullException(nameof(sceneReference)),
+                activeWhenOn);
+        }
+
+        public bool Equals(PartToggleTargetPlan other)
+        {
+            return other != null
+                   && string.Equals(StableId, other.StableId, StringComparison.Ordinal);
+        }
+
+        public override bool Equals(object obj) => Equals(obj as PartToggleTargetPlan);
+        public override int GetHashCode() =>
+            StringComparer.Ordinal.GetHashCode(StableId ?? string.Empty);
+    }
+
+    internal sealed class PartTogglePlan
+    {
+        internal PartTogglePlan(string label, IEnumerable<PrefabTargetKey> targets, bool? initialOn = null)
+            : this(
+                Guid.NewGuid().ToString("N"),
+                label,
+                (targets ?? Enumerable.Empty<PrefabTargetKey>())
+                .Select(target => PartToggleTargetPlan.ForPrefab(target)),
+                initialOn)
+        {
+        }
+
+        internal PartTogglePlan(
+            string itemId,
+            string label,
+            IEnumerable<PrefabTargetKey> targets,
+            bool? initialOn = null)
+            : this(
+                itemId,
+                label,
+                (targets ?? Enumerable.Empty<PrefabTargetKey>())
+                .Select(target => PartToggleTargetPlan.ForPrefab(target)),
+                initialOn)
+        {
+        }
+
+        internal PartTogglePlan(
+            string label,
+            IEnumerable<PartToggleTargetPlan> targets,
+            bool? initialOn = null)
+            : this(
+                Guid.NewGuid().ToString("N"),
+                label,
+                targets,
+                initialOn)
+        {
+        }
+
+        internal PartTogglePlan(
+            string itemId,
+            string label,
+            IEnumerable<PartToggleTargetPlan> targets,
+            bool? initialOn = null)
+        {
+            ItemId = itemId ?? string.Empty;
+            Label = label ?? string.Empty;
+            Targets = (targets ?? Enumerable.Empty<PartToggleTargetPlan>()).ToList();
+            InitialOn = initialOn;
+        }
+
+        internal string ItemId { get; }
         internal string Label { get; set; }
-        internal List<PrefabTargetKey> Targets { get; }
+        internal List<PartToggleTargetPlan> Targets { get; }
         internal bool? InitialOn { get; set; }
 
         internal bool GetTargetActiveWhenOn(PrefabTargetKey target)
         {
-            return _activeWhenOn.TryGetValue(target, out var activeWhenOn) && activeWhenOn;
+            return Targets.FirstOrDefault(candidate =>
+                       candidate.Source == PartTargetSource.OutfitPrefab
+                       && candidate.PrefabKey.Equals(target))
+                   ?.ActiveWhenOn == true;
         }
 
         internal void SetTargetActiveWhenOn(PrefabTargetKey target, bool activeWhenOn)
         {
-            _activeWhenOn[target] = activeWhenOn;
+            var candidate = Targets.FirstOrDefault(item =>
+                item.Source == PartTargetSource.OutfitPrefab
+                && item.PrefabKey.Equals(target));
+            if (candidate != null) candidate.ActiveWhenOn = activeWhenOn;
         }
 
         internal bool TryGetEffectiveInitialOn(OutfitAnalysis analysis, out bool initialOn)
         {
-            if (InitialOn.HasValue)
-            {
-                initialOn = InitialOn.Value;
-                return true;
-            }
-
-            var targetStates = Targets
-                .Select(targetKey => new
-                {
-                    Target = analysis.FindTarget(targetKey),
-                    ActiveWhenOn = GetTargetActiveWhenOn(targetKey),
-                })
-                .Where(binding => binding.Target != null)
-                .Select(binding => binding.Target.ActiveSelf == binding.ActiveWhenOn)
-                .Distinct()
-                .ToArray();
-
-            if (targetStates.Length == 1)
-            {
-                initialOn = targetStates[0];
-                return true;
-            }
-
-            initialOn = false;
-            return false;
+            _ = analysis;
+            initialOn = InitialOn ?? false;
+            return true;
         }
     }
 
@@ -233,7 +332,8 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
         internal string MasterToggleLabel { get; set; }
         internal bool MasterDefaultOn { get; set; }
         internal OutfitSetupMode SetupMode { get; set; } = OutfitSetupMode.AutomaticPreferExisting;
-        internal List<SceneObjectReference> ExclusionTargets { get; } = new List<SceneObjectReference>();
+        internal List<MasterSceneTargetPlan> MasterSceneTargets { get; } =
+            new List<MasterSceneTargetPlan>();
         internal List<PartTogglePlan> PartToggles { get; } = new List<PartTogglePlan>();
         internal List<BlendshapeSyncPlan> BlendshapeSyncs { get; } = new List<BlendshapeSyncPlan>();
         internal bool AllowDuplicate { get; set; }

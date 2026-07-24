@@ -36,8 +36,9 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
 
             var avatar = plan.AvatarReference.Resolve();
             var placement = plan.PlacementReference.Resolve();
-            var exclusions = plan.ExclusionTargets.Select(reference => reference.Resolve()).ToArray();
+            var masterSceneTargets = ResolveMasterSceneTargets(plan);
             var sourceHashBefore = AssetDatabase.GetAssetDependencyHash(plan.SourceAssetPath).ToString();
+            var sceneTargetStates = CaptureSceneTargetStates(plan, masterSceneTargets);
 
             Undo.IncrementCurrentGroup();
             var undoGroup = Undo.GetCurrentGroup();
@@ -86,28 +87,25 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                         var item = Undo.AddComponent<ModularAvatarMenuItem>(itemObject);
                         InitializeMenuItem(item, binding.Plan.Label, PortableControlType.Toggle, binding.InitialOn);
                         var toggle = Undo.AddComponent<ModularAvatarObjectToggle>(itemObject);
-                        partToggleComponents.Add(new PartToggleComponentBinding(toggle, binding.Targets));
+                        partToggleComponents.Add(new PartToggleComponentBinding(
+                            toggle,
+                            binding.Targets));
                     }
                 }
 
                 var blendshapeSyncComponents = CreateBlendshapeSyncComponents(blendshapeBindings);
 
                 SetPrefabInstanceActive(outfitInstance, false);
-                foreach (var binding in partBindings)
-                {
-                    foreach (var target in binding.Targets)
-                    {
-                        SetPrefabInstanceActive(target.GameObject, !target.ActiveWhenOn);
-                    }
-                }
 
                 masterToggle.Objects = new List<ToggledObject>
                 {
                     CreateToggledObject(outfitInstance, true),
                 };
-                foreach (var exclusion in exclusions)
+                foreach (var sceneTarget in masterSceneTargets)
                 {
-                    masterToggle.Objects.Add(CreateToggledObject(exclusion, false));
+                    masterToggle.Objects.Add(CreateToggledObject(
+                        sceneTarget.GameObject,
+                        sceneTarget.ActiveWhenOn));
                 }
 
                 foreach (var binding in partToggleComponents)
@@ -118,7 +116,8 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                 }
 
                 ValidateGeneratedResult(plan, avatar, generatedRoot, outfitInstance, masterToggle,
-                    partToggleComponents, blendshapeSyncComponents, sourceHashBefore);
+                    masterSceneTargets, partToggleComponents, blendshapeSyncComponents,
+                    sourceHashBefore, sceneTargetStates);
 
                 Undo.SetCurrentGroupName(UndoName);
                 Undo.CollapseUndoOperations(undoGroup);
@@ -146,6 +145,30 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             return instance;
         }
 
+        private static ResolvedMasterSceneTarget[] ResolveMasterSceneTargets(OutfitSetupPlan plan)
+        {
+            return plan.MasterSceneTargets
+                .Select(target =>
+                {
+                    if (target?.Reference == null)
+                    {
+                        throw new OutfitGenerationException("Scene対象参照がありません。");
+                    }
+
+                    var resolved = target.Reference.Resolve();
+                    if (resolved == null)
+                    {
+                        throw new OutfitGenerationException(
+                            "Scene対象をGlobalObjectIdから再解決できません。");
+                    }
+
+                    return new ResolvedMasterSceneTarget(
+                        target.StableId,
+                        resolved,
+                        target.ActiveWhenOn);
+                })
+                .ToArray();
+        }
         private static List<ResolvedPartBinding> ResolvePartBindings(
             OutfitSetupPlan plan,
             GameObject outfitInstance)
@@ -159,9 +182,14 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                 }
 
                 var targets = part.Targets
-                    .Select(key => new ResolvedPartTarget(
-                        key.Resolve(outfitInstance, plan.DependencyHash),
-                        part.GetTargetActiveWhenOn(key)))
+                    .OrderBy(target => target.StableId, StringComparer.Ordinal)
+                    .Select(target => new ResolvedPartTarget(
+                        target.StableId,
+                        target.Source,
+                        target.Source == PartTargetSource.OutfitPrefab
+                            ? target.PrefabKey.Resolve(outfitInstance, plan.DependencyHash)
+                            : target.SceneReference?.Resolve(),
+                        target.ActiveWhenOn))
                     .ToArray();
                 if (targets.Any(target => target.GameObject == null))
                 {
@@ -174,6 +202,24 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             return result;
         }
 
+        private static SceneTargetState[] CaptureSceneTargetStates(
+            OutfitSetupPlan plan,
+            IEnumerable<ResolvedMasterSceneTarget> masterSceneTargets)
+        {
+            var partSceneTargets = plan.PartToggles
+                .Where(part => part != null)
+                .SelectMany(part => part.Targets)
+                .Where(target => target != null
+                                 && target.Source == PartTargetSource.SceneObject)
+                .Select(target => target.SceneReference?.Resolve());
+            return masterSceneTargets
+                .Select(target => target.GameObject)
+                .Concat(partSceneTargets)
+                .Where(target => target != null)
+                .Distinct()
+                .Select(target => new SceneTargetState(target))
+                .ToArray();
+        }
         private static List<ResolvedBlendshapeBinding> ResolveBlendshapeBindings(
             OutfitSetupPlan plan,
             GameObject outfitInstance)
@@ -345,9 +391,11 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             GameObject generatedRoot,
             GameObject outfitInstance,
             ModularAvatarObjectToggle masterToggle,
+            IReadOnlyList<ResolvedMasterSceneTarget> masterSceneTargets,
             IReadOnlyList<PartToggleComponentBinding> partToggles,
             IReadOnlyList<BlendshapeSyncComponentBinding> blendshapeSyncs,
-            string sourceHashBefore)
+            string sourceHashBefore,
+            IReadOnlyList<SceneTargetState> sceneTargetStates)
         {
             if (generatedRoot == null || generatedRoot.transform.parent == null)
             {
@@ -362,6 +410,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             }
 
             ValidateToggleReferences(masterToggle, avatar);
+            ValidateMasterToggle(masterToggle, outfitInstance, masterSceneTargets);
             foreach (var partToggle in partToggles)
             {
                 ValidateToggleReferences(partToggle.Component, avatar);
@@ -378,8 +427,60 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             {
                 throw new OutfitGenerationException("生成中に元衣装Prefabまたは依存アセットが変更されました。");
             }
+
+            foreach (var sceneTargetState in sceneTargetStates)
+            {
+                if (!sceneTargetState.IsUnchanged())
+                {
+                    throw new OutfitGenerationException(
+                        "生成中にScene対象が変更されました。");
+                }
+            }
         }
 
+        private static void ValidateMasterToggle(
+            ModularAvatarObjectToggle masterToggle,
+            GameObject outfitInstance,
+            IReadOnlyList<ResolvedMasterSceneTarget> sceneTargets)
+        {
+            var expected = new Dictionary<GameObject, bool>
+            {
+                { outfitInstance, true },
+            };
+            foreach (var sceneTarget in sceneTargets)
+            {
+                if (expected.ContainsKey(sceneTarget.GameObject))
+                {
+                    throw new OutfitGenerationException("全体トグルのScene対象が重複しています。");
+                }
+
+                expected.Add(sceneTarget.GameObject, sceneTarget.ActiveWhenOn);
+            }
+
+            if (masterToggle.Objects == null || masterToggle.Objects.Count != expected.Count)
+            {
+                throw new OutfitGenerationException("全体トグルの対象数が一致しません。");
+            }
+
+            foreach (var configured in masterToggle.Objects)
+            {
+                var resolved = configured.Object?.Get(masterToggle);
+                if (resolved == null
+                    || !expected.TryGetValue(resolved, out var expectedActive)
+                    || configured.Active != expectedActive)
+                {
+                    throw new OutfitGenerationException(
+                        "全体トグルのScene対象またはON時の表示設定が一致しません。");
+                }
+
+                expected.Remove(resolved);
+            }
+
+            if (expected.Count != 0)
+            {
+                throw new OutfitGenerationException("全体トグルの対象をすべて検証できませんでした。");
+            }
+        }
         private static void ValidateToggleReferences(ModularAvatarObjectToggle toggle, GameObject avatar)
         {
             if (toggle == null || toggle.Objects == null || toggle.Objects.Count == 0)
@@ -451,6 +552,22 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                    && Mathf.Approximately(last.value, 100f);
         }
 
+        private sealed class ResolvedMasterSceneTarget
+        {
+            internal ResolvedMasterSceneTarget(
+                string stableId,
+                GameObject gameObject,
+                bool activeWhenOn)
+            {
+                StableId = stableId ?? string.Empty;
+                GameObject = gameObject;
+                ActiveWhenOn = activeWhenOn;
+            }
+
+            internal string StableId { get; }
+            internal GameObject GameObject { get; }
+            internal bool ActiveWhenOn { get; }
+        }
         private sealed class ResolvedPartBinding
         {
             internal ResolvedPartBinding(PartTogglePlan plan, bool initialOn, ResolvedPartTarget[] targets)
@@ -467,19 +584,29 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
 
         private sealed class ResolvedPartTarget
         {
-            internal ResolvedPartTarget(GameObject gameObject, bool activeWhenOn)
+            internal ResolvedPartTarget(
+                string stableId,
+                PartTargetSource source,
+                GameObject gameObject,
+                bool activeWhenOn)
             {
+                StableId = stableId ?? string.Empty;
+                Source = source;
                 GameObject = gameObject;
                 ActiveWhenOn = activeWhenOn;
             }
 
+            internal string StableId { get; }
+            internal PartTargetSource Source { get; }
             internal GameObject GameObject { get; }
             internal bool ActiveWhenOn { get; }
         }
 
         private sealed class PartToggleComponentBinding
         {
-            internal PartToggleComponentBinding(ModularAvatarObjectToggle component, ResolvedPartTarget[] targets)
+            internal PartToggleComponentBinding(
+                ModularAvatarObjectToggle component,
+                ResolvedPartTarget[] targets)
             {
                 Component = component;
                 Targets = targets;
@@ -487,6 +614,61 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
 
             internal ModularAvatarObjectToggle Component { get; }
             internal ResolvedPartTarget[] Targets { get; }
+        }
+
+        private sealed class SceneTargetState
+        {
+            private readonly GameObject _target;
+            private readonly bool _activeSelf;
+            private readonly Transform _parent;
+            private readonly int _siblingIndex;
+            private readonly Vector3 _localPosition;
+            private readonly Quaternion _localRotation;
+            private readonly Vector3 _localScale;
+            private readonly RendererState[] _renderers;
+
+            internal SceneTargetState(GameObject target)
+            {
+                _target = target;
+                _activeSelf = target.activeSelf;
+                _parent = target.transform.parent;
+                _siblingIndex = target.transform.GetSiblingIndex();
+                _localPosition = target.transform.localPosition;
+                _localRotation = target.transform.localRotation;
+                _localScale = target.transform.localScale;
+                _renderers = target.GetComponentsInChildren<Renderer>(true)
+                    .Select(renderer => new RendererState(renderer))
+                    .ToArray();
+            }
+
+            internal bool IsUnchanged()
+            {
+                return _target != null
+                       && _target.activeSelf == _activeSelf
+                       && _target.transform.parent == _parent
+                       && _target.transform.GetSiblingIndex() == _siblingIndex
+                       && _target.transform.localPosition == _localPosition
+                       && _target.transform.localRotation == _localRotation
+                       && _target.transform.localScale == _localScale
+                       && _renderers.All(renderer => renderer.IsUnchanged());
+            }
+        }
+
+        private readonly struct RendererState
+        {
+            private readonly Renderer _renderer;
+            private readonly bool _enabled;
+
+            internal RendererState(Renderer renderer)
+            {
+                _renderer = renderer;
+                _enabled = renderer != null && renderer.enabled;
+            }
+
+            internal bool IsUnchanged()
+            {
+                return _renderer != null && _renderer.enabled == _enabled;
+            }
         }
 
         private sealed class ResolvedBlendshapeBinding

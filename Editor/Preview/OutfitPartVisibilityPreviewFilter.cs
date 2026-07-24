@@ -25,7 +25,9 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
         {
             _outfitRenderers = NormalizeRenderers(outfitRenderers);
             var partArray = (parts ?? Enumerable.Empty<OutfitPartPreviewSnapshot>()).ToArray();
-            _canEnableRenderers = partArray.Any(part => part.Targets.Length > 0);
+            _canEnableRenderers = partArray.Any(
+                part => part.Targets.Any(
+                    target => target.Source == PartTargetSource.OutfitPrefab));
             _visibility = new PublishedValue<VisibilityState>(
                 CreateVisibilityState(
                     _outfitRenderers,
@@ -71,6 +73,12 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             _visibility.Value = current.WithPreviewState(previewOn, partStates);
         }
 
+        internal bool IsRendererVisible(Renderer renderer)
+        {
+            if (renderer == null) return false;
+            return TryEvaluateVisibility(_visibility.Value, renderer, out var visible) && visible;
+        }
+
         public ImmutableList<RenderGroup> GetTargetGroups(ComputeContext context)
         {
             TargetGroupEvaluationCount++;
@@ -97,7 +105,37 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             bool activeWhenOn)
         {
             if (!previewOn || !rendererEnabled || !staticHierarchyActive) return false;
-            return !hasPart || (partOn ? activeWhenOn : !activeWhenOn);
+            return !hasPart || !partOn || activeWhenOn;
+        }
+
+        private static bool TryEvaluateVisibility(
+            VisibilityState state,
+            Renderer renderer,
+            out bool visible)
+        {
+            visible = false;
+            if (state == null || renderer == null || !state.Rules.TryGetValue(renderer, out var rule))
+            {
+                return false;
+            }
+
+            var targetActive = rule.DefaultTargetActive;
+            if (rule.Controls.Length > 0
+                && PartToggleMenuOrderResolver.TryResolveLastEnabled(
+                    rule.Controls,
+                    control => control.ItemId,
+                    control => control.ActiveWhenOn,
+                    state.PartStates,
+                    out var selectedState))
+            {
+                targetActive = selectedState;
+            }
+
+            visible = state.PreviewOn
+                      && rule.RendererEnabled
+                      && rule.StaticHierarchyActive
+                      && (rule.Controls.Length == 0 || targetActive);
+            return true;
         }
 
         private static VisibilityState CreateVisibilityState(
@@ -113,25 +151,28 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             if (sourceToMirror == null) throw new ArgumentNullException(nameof(sourceToMirror));
 
             var partArray = (parts ?? Enumerable.Empty<OutfitPartPreviewSnapshot>()).ToArray();
-            var controls = new Dictionary<Transform, PartControl>();
+            var controls = new Dictionary<Transform, List<PartControl>>();
             foreach (var part in partArray)
             {
                 foreach (var target in part.Targets)
                 {
-                    var sourceTarget = target.TargetKey.Resolve(sourcePrefab, dependencyHash);
+                    if (target.Source != PartTargetSource.OutfitPrefab) continue;
+                    var sourceTarget = target.PrefabKey.Resolve(sourcePrefab, dependencyHash);
                     if (sourceTarget == null)
                     {
                         throw new InvalidOperationException(
                             $"個別項目「{part.Label}」の対象をPrefab上で解決できませんでした。");
                     }
 
-                    if (!controls.TryAdd(
-                            sourceTarget.transform,
-                            new PartControl(part.Key, target.ActiveWhenOn)))
+                    if (!controls.TryGetValue(sourceTarget.transform, out var targetControls))
                     {
-                        throw new InvalidOperationException(
-                            "同じPrefab内オブジェクトが複数の個別項目に指定されています。");
+                        targetControls = new List<PartControl>();
+                        controls.Add(sourceTarget.transform, targetControls);
                     }
+
+                    targetControls.Add(new PartControl(
+                        part.ItemId,
+                        target.ActiveWhenOn));
                 }
             }
 
@@ -160,23 +201,21 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                 }
 
                 var staticHierarchyActive = placementHierarchyActive;
-                var hasPart = false;
-                var partKey = string.Empty;
-                var activeWhenOn = false;
+                var defaultTargetActive = true;
+                List<PartControl> rendererControls = null;
                 var current = sourceTransform;
                 while (current != null && current != sourcePrefab.transform)
                 {
-                    if (controls.TryGetValue(current, out var control))
+                    if (controls.TryGetValue(current, out var controlsAtTransform))
                     {
-                        if (hasPart)
+                        if (rendererControls != null)
                         {
                             throw new InvalidOperationException(
                                 "個別パーツの対象に祖先・子孫関係のあるGameObjectを同時指定できません。");
                         }
 
-                        hasPart = true;
-                        partKey = control.PartKey;
-                        activeWhenOn = control.ActiveWhenOn;
+                        rendererControls = controlsAtTransform;
+                        defaultTargetActive = current.gameObject.activeSelf;
                         usedPartTargets.Add(current);
                     }
                     else
@@ -190,9 +229,9 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                 rules[renderer] = new RendererRule(
                     renderer.enabled,
                     staticHierarchyActive,
-                    hasPart,
-                    partKey,
-                    activeWhenOn);
+                    defaultTargetActive,
+                    rendererControls?.ToImmutableArray()
+                    ?? ImmutableArray<PartControl>.Empty);
             }
 
             var warnings = controls.Keys
@@ -242,13 +281,13 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
 
         private readonly struct PartControl
         {
-            internal PartControl(string partKey, bool activeWhenOn)
+            internal PartControl(string itemId, bool activeWhenOn)
             {
-                PartKey = partKey;
+                ItemId = itemId ?? string.Empty;
                 ActiveWhenOn = activeWhenOn;
             }
 
-            internal string PartKey { get; }
+            internal string ItemId { get; }
             internal bool ActiveWhenOn { get; }
         }
 
@@ -257,22 +296,21 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             internal RendererRule(
                 bool rendererEnabled,
                 bool staticHierarchyActive,
-                bool hasPart,
-                string partKey,
-                bool activeWhenOn)
+                bool defaultTargetActive,
+                ImmutableArray<PartControl> controls)
             {
                 RendererEnabled = rendererEnabled;
                 StaticHierarchyActive = staticHierarchyActive;
-                HasPart = hasPart;
-                PartKey = partKey ?? string.Empty;
-                ActiveWhenOn = activeWhenOn;
+                DefaultTargetActive = defaultTargetActive;
+                Controls = controls.IsDefault
+                    ? ImmutableArray<PartControl>.Empty
+                    : controls;
             }
 
             internal bool RendererEnabled { get; }
             internal bool StaticHierarchyActive { get; }
-            internal bool HasPart { get; }
-            internal string PartKey { get; }
-            internal bool ActiveWhenOn { get; }
+            internal bool DefaultTargetActive { get; }
+            internal ImmutableArray<PartControl> Controls { get; }
         }
 
         private sealed class VisibilityState
@@ -321,18 +359,8 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             {
                 if (proxy == null) return;
                 var state = _visibility.Value;
-                if (!state.Rules.TryGetValue(original, out var rule)) return;
-
-                var partOn = rule.HasPart
-                             && state.PartStates.TryGetValue(rule.PartKey, out var selected)
-                             && selected;
-                proxy.enabled = EvaluateVisibility(
-                    state.PreviewOn,
-                    rule.RendererEnabled,
-                    rule.StaticHierarchyActive,
-                    rule.HasPart,
-                    partOn,
-                    rule.ActiveWhenOn);
+                if (TryEvaluateVisibility(state, original, out var visible))
+                    proxy.enabled = visible;
             }
 
             public void Dispose()
