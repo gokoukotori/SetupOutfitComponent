@@ -17,12 +17,13 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             var targets = new List<PrefabTargetInfo>();
             var partCandidates = new List<OutfitPartCandidate>();
             var blendshapeRenderers = new List<OutfitRendererInfo>();
+            var existingShapeChangers = new List<ExistingShapeChangerInfo>();
 
             if (sourcePrefab == null)
             {
                 errors.Add("衣装Prefabが選択されていません。");
                 return new OutfitAnalysis(null, string.Empty, string.Empty, string.Empty, string.Empty,
-                    targets, partCandidates, blendshapeRenderers, errors, warnings);
+                    targets, partCandidates, blendshapeRenderers, existingShapeChangers, errors, warnings);
             }
 
             var assetPath = AssetDatabase.GetAssetPath(sourcePrefab);
@@ -77,10 +78,21 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
 
             if (errors.Count == 0)
             {
-                CollectTargets(sourcePrefab, dependencyHash, targets, partCandidates, blendshapeRenderers);
+                CollectTargets(
+                    sourcePrefab,
+                    dependencyHash,
+                    targets,
+                    partCandidates,
+                    blendshapeRenderers,
+                    existingShapeChangers);
                 if (blendshapeRenderers.Any(renderer => renderer.HasExistingBlendshapeSync))
                 {
                     warnings.Add("Prefabには既存のMA Blendshape Syncがあります。既存設定は保持され、新規設定の追加対象にはできません。");
+                }
+
+                if (existingShapeChangers.Count > 0)
+                {
+                    warnings.Add("Prefabには既存のMA Shape Changerがあります。既存設定を保持したまま新規設定を追加します。");
                 }
             }
 
@@ -93,6 +105,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                 targets,
                 partCandidates,
                 blendshapeRenderers,
+                existingShapeChangers,
                 errors,
                 warnings);
         }
@@ -120,7 +133,8 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             string dependencyHash,
             ICollection<PrefabTargetInfo> targets,
             ICollection<OutfitPartCandidate> partCandidates,
-            ICollection<OutfitRendererInfo> blendshapeRenderers)
+            ICollection<OutfitRendererInfo> blendshapeRenderers,
+            ICollection<ExistingShapeChangerInfo> existingShapeChangers)
         {
             foreach (var transform in root.GetComponentsInChildren<Transform>(true))
             {
@@ -128,6 +142,23 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                 var displayPath = transform == root.transform
                     ? root.name
                     : GetRelativePath(root.transform, transform);
+                var shapeChangers = transform.GetComponents<ModularAvatarShapeChanger>();
+                foreach (var shapeChanger in shapeChangers)
+                {
+                    existingShapeChangers.Add(new ExistingShapeChangerInfo(
+                        targetKey,
+                        displayPath,
+                        shapeChanger.Threshold,
+                        shapeChanger.Inverted,
+                        (shapeChanger.Shapes ?? new List<ChangedShape>())
+                        .Where(shape => shape != null)
+                        .Select(shape => new ExistingShapeChangeInfo(
+                            shape.Object?.referencePath,
+                            shape.ShapeName,
+                            shape.ChangeType,
+                            shape.Value))));
+                }
+
                 var skinnedMeshRenderer = transform.GetComponent<SkinnedMeshRenderer>();
                 if (skinnedMeshRenderer != null)
                 {
@@ -142,7 +173,8 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                         displayPath,
                         transform.name,
                         blendshapeNames,
-                        transform.GetComponent<ModularAvatarBlendshapeSync>() != null));
+                        transform.GetComponent<ModularAvatarBlendshapeSync>() != null,
+                        shapeChangers.Length > 0));
                 }
 
                 if (transform == root.transform) continue;

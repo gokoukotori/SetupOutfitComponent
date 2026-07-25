@@ -2,6 +2,19 @@
 
 このパッケージの主な変更を記録します。
 
+## [0.2.5] - 2026-07-24
+
+- 新しいステップ6を追加し、衣装全体または個別メニュー項目のON状態に連動するMA Shape Changerの`Set`設定を作成できるようにしました。
+- Rendererが直接付いている衣装Prefab内GameObjectへMA Shape ChangerをAdded Component Overrideとして追加し、そのGameObjectと祖先の表示状態にSetを連動できるようにしました。
+- 衣装Renderer所有者の候補をPrefab Hierarchy順に選択でき、元の`activeSelf`、Renderer種別、関連する個別メニュー項目をウィザードと確認画面へ表示するようにしました。
+- 対象アバター側と衣装Prefab側の`SkinnedMeshRenderer`、BlendShape名、`0～100`のSet値を指定できるようにしました。
+- 専用NDMF SceneViewへ生成予定のShape Changer Setを反映し、全体・衣装Rendererのactive階層・個別メニュー状態とHierarchy後勝ちの結果を生成前に確認できるようにしました。
+- 入力Prefabに含まれる既存MA Shape Changerを変更せず保持し、ウィザードと確認画面へ読み取り専用で表示するようにしました。
+- 衣装Renderer表示連動は元PrefabやBlendShape Weightを変更せず、所有者が非アクティブになった場合はそのSet寄与だけを解放する構成にしました。
+- Shape操作対象RendererまたはBlendShape名が未指定の行を専用プレビューから除外し、完成済みのShape Changer設定と衣装表示のプレビューを継続できるようにしました。未指定行は生成時のエラーとして維持します。
+- ステップ3・4・6のプレビュー入口を同じ累積プレビューへ統一しました。初回は全体トグルの初期ON設定に従い、同じウィザードから開き直した場合は全体と個別項目の一時ON/OFFを維持し、明示的な初期状態リセットだけで個別状態を戻します。
+- Shape Changerの`Delete`、Threshold編集、Inverted編集は対象外とし、公開API、Runtime assembly、既存の依存条件を維持しました。
+
 ## [0.2.4] - 2026-07-24
 
 - ステップ3のScene対象ごとに、衣装ON時の`表示`／`非表示`を指定できるようにしました。新規対象は従来互換の`非表示`で追加され、全体OFF時は元Sceneの状態へ戻ります。

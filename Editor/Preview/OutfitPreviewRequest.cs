@@ -200,6 +200,117 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             return false;
         }
     }
+
+    internal readonly struct OutfitShapeChangePreviewSnapshot :
+        IEquatable<OutfitShapeChangePreviewSnapshot>
+    {
+        internal OutfitShapeChangePreviewSnapshot(
+            string ownerItemId,
+            bool isMaster,
+            PartTargetSource source,
+            PrefabTargetKey prefabRendererKey,
+            SkinnedMeshRenderer sceneRenderer,
+            string stableRendererId,
+            string shapeName,
+            float value)
+            : this(
+                ownerItemId,
+                isMaster,
+                false,
+                default,
+                -1,
+                source,
+                prefabRendererKey,
+                sceneRenderer,
+                stableRendererId,
+                shapeName,
+                value)
+        {
+        }
+
+        internal OutfitShapeChangePreviewSnapshot(
+            string ownerItemId,
+            bool isMaster,
+            bool hasOutfitOwner,
+            PrefabTargetKey outfitOwnerKey,
+            int ownerHierarchyOrder,
+            PartTargetSource source,
+            PrefabTargetKey prefabRendererKey,
+            SkinnedMeshRenderer sceneRenderer,
+            string stableRendererId,
+            string shapeName,
+            float value)
+        {
+            OwnerItemId = ownerItemId ?? string.Empty;
+            IsMaster = isMaster;
+            HasOutfitOwner = hasOutfitOwner;
+            OutfitOwnerKey = outfitOwnerKey;
+            OwnerHierarchyOrder = ownerHierarchyOrder;
+            Source = source;
+            PrefabRendererKey = prefabRendererKey;
+            SceneRenderer = sceneRenderer;
+            StableRendererId = stableRendererId ?? string.Empty;
+            ShapeName = shapeName ?? string.Empty;
+            Value = value;
+        }
+
+        internal string OwnerItemId { get; }
+        internal bool IsMaster { get; }
+        internal bool HasOutfitOwner { get; }
+        internal PrefabTargetKey OutfitOwnerKey { get; }
+        internal int OwnerHierarchyOrder { get; }
+        internal PartTargetSource Source { get; }
+        internal PrefabTargetKey PrefabRendererKey { get; }
+        internal SkinnedMeshRenderer SceneRenderer { get; }
+        internal string StableRendererId { get; }
+        internal string ShapeName { get; }
+        internal float Value { get; }
+
+        public bool Equals(OutfitShapeChangePreviewSnapshot other)
+        {
+            return string.Equals(OwnerItemId, other.OwnerItemId, StringComparison.Ordinal)
+                   && IsMaster == other.IsMaster
+                   && HasOutfitOwner == other.HasOutfitOwner
+                   && OutfitOwnerKey.Equals(other.OutfitOwnerKey)
+                   && OwnerHierarchyOrder == other.OwnerHierarchyOrder
+                   && Source == other.Source
+                   && PrefabRendererKey.Equals(other.PrefabRendererKey)
+                   && SceneRenderer == other.SceneRenderer
+                   && string.Equals(
+                       StableRendererId,
+                       other.StableRendererId,
+                       StringComparison.Ordinal)
+                   && string.Equals(ShapeName, other.ShapeName, StringComparison.Ordinal)
+                   && Value.Equals(other.Value);
+        }
+
+        public override bool Equals(object obj)
+        {
+            return obj is OutfitShapeChangePreviewSnapshot other && Equals(other);
+        }
+
+        public override int GetHashCode()
+        {
+            unchecked
+            {
+                var hashCode = StringComparer.Ordinal.GetHashCode(OwnerItemId);
+                hashCode = (hashCode * 397) ^ IsMaster.GetHashCode();
+                hashCode = (hashCode * 397) ^ HasOutfitOwner.GetHashCode();
+                hashCode = (hashCode * 397) ^ OutfitOwnerKey.GetHashCode();
+                hashCode = (hashCode * 397) ^ OwnerHierarchyOrder;
+                hashCode = (hashCode * 397) ^ (int)Source;
+                hashCode = (hashCode * 397) ^ PrefabRendererKey.GetHashCode();
+                hashCode = (hashCode * 397)
+                           ^ (SceneRenderer != null ? SceneRenderer.GetInstanceID() : 0);
+                hashCode = (hashCode * 397)
+                           ^ StringComparer.Ordinal.GetHashCode(StableRendererId);
+                hashCode = (hashCode * 397)
+                           ^ StringComparer.Ordinal.GetHashCode(ShapeName);
+                return (hashCode * 397) ^ Value.GetHashCode();
+            }
+        }
+    }
+
     internal sealed class OutfitPreviewRequest
     {
         private OutfitPreviewRequest(
@@ -210,7 +321,9 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             string dependencyHash,
             bool initialOn,
             PlacementState[] placementStates,
-            ImmutableArray<OutfitPartPreviewSnapshot> parts)
+            ImmutableArray<OutfitPartPreviewSnapshot> parts,
+            ImmutableArray<OutfitShapeChangePreviewSnapshot> shapeChanges,
+            ImmutableArray<string> shapeChangeWarnings)
         {
             SourcePrefab = sourcePrefab;
             AvatarRoot = avatarRoot;
@@ -224,6 +337,12 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             Parts = parts.IsDefault
                 ? ImmutableArray<OutfitPartPreviewSnapshot>.Empty
                 : parts;
+            ShapeChanges = shapeChanges.IsDefault
+                ? ImmutableArray<OutfitShapeChangePreviewSnapshot>.Empty
+                : shapeChanges;
+            ShapeChangeWarnings = shapeChangeWarnings.IsDefault
+                ? ImmutableArray<string>.Empty
+                : shapeChangeWarnings;
         }
 
         internal GameObject SourcePrefab { get; }
@@ -233,6 +352,8 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
         internal string DependencyHash { get; }
         internal bool InitialOn { get; }
         internal ImmutableArray<OutfitPartPreviewSnapshot> Parts { get; }
+        internal ImmutableArray<OutfitShapeChangePreviewSnapshot> ShapeChanges { get; }
+        internal ImmutableArray<string> ShapeChangeWarnings { get; }
         private PlacementState[] PlacementStates { get; }
 
         internal static bool TryCreate(
@@ -252,6 +373,8 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                 ResolveMasterSceneTargets(masterSceneTargets),
                 dependencyHash,
                 initialOn,
+                null,
+                null,
                 null,
                 null,
                 false,
@@ -284,6 +407,8 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                 initialOn,
                 null,
                 null,
+                null,
+                null,
                 false,
                 out request,
                 out error);
@@ -300,6 +425,33 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             out OutfitPreviewRequest request,
             out string error)
         {
+            return TryCreate(
+                sourcePrefab,
+                avatarRoot,
+                placement,
+                masterSceneTargets,
+                dependencyHash,
+                initialOn,
+                analysis,
+                partToggles,
+                null,
+                out request,
+                out error);
+        }
+
+        internal static bool TryCreate(
+            GameObject sourcePrefab,
+            GameObject avatarRoot,
+            Transform placement,
+            IEnumerable<MasterSceneTargetPlan> masterSceneTargets,
+            string dependencyHash,
+            bool initialOn,
+            OutfitAnalysis analysis,
+            IEnumerable<PartTogglePlan> partToggles,
+            IEnumerable<ShapeChangerSettingPlan> masterShapeChanges,
+            out OutfitPreviewRequest request,
+            out string error)
+        {
             return TryCreateCore(
                 sourcePrefab,
                 avatarRoot,
@@ -309,6 +461,38 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                 initialOn,
                 analysis,
                 partToggles,
+                masterShapeChanges,
+                null,
+                true,
+                out request,
+                out error);
+        }
+
+        internal static bool TryCreate(
+            GameObject sourcePrefab,
+            GameObject avatarRoot,
+            Transform placement,
+            IEnumerable<MasterSceneTargetPlan> masterSceneTargets,
+            string dependencyHash,
+            bool initialOn,
+            OutfitAnalysis analysis,
+            IEnumerable<PartTogglePlan> partToggles,
+            IEnumerable<ShapeChangerSettingPlan> masterShapeChanges,
+            IEnumerable<OutfitRendererShapeChangerPlan> outfitRendererShapeChangers,
+            out OutfitPreviewRequest request,
+            out string error)
+        {
+            return TryCreateCore(
+                sourcePrefab,
+                avatarRoot,
+                placement,
+                ResolveMasterSceneTargets(masterSceneTargets),
+                dependencyHash,
+                initialOn,
+                analysis,
+                partToggles,
+                masterShapeChanges,
+                outfitRendererShapeChangers,
                 true,
                 out request,
                 out error);
@@ -323,6 +507,8 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             bool initialOn,
             OutfitAnalysis analysis,
             IEnumerable<PartTogglePlan> partToggles,
+            IEnumerable<ShapeChangerSettingPlan> masterShapeChanges,
+            IEnumerable<OutfitRendererShapeChangerPlan> outfitRendererShapeChangers,
             bool validateParts,
             out OutfitPreviewRequest request,
             out string error)
@@ -443,6 +629,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                 .Select(target => target.SceneObject)
                 .ToArray();
             var parts = ImmutableArray<OutfitPartPreviewSnapshot>.Empty;
+            var partPlans = (partToggles ?? Enumerable.Empty<PartTogglePlan>()).ToArray();
             if (validateParts
                 && !TryCreatePartSnapshots(
                     sourcePrefab,
@@ -451,8 +638,25 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                     resolvedSceneObjects,
                     dependencyHash,
                     analysis,
-                    partToggles,
+                    partPlans,
                     out parts,
+                    out error))
+            {
+                return false;
+            }
+
+            var shapeChanges = ImmutableArray<OutfitShapeChangePreviewSnapshot>.Empty;
+            var shapeChangeWarnings = ImmutableArray<string>.Empty;
+            if (validateParts
+                && !TryCreateShapeChangeSnapshots(
+                    sourcePrefab,
+                    avatarRoot,
+                    dependencyHash,
+                    masterShapeChanges,
+                    outfitRendererShapeChangers,
+                    partPlans,
+                    out shapeChanges,
+                    out shapeChangeWarnings,
                     out error))
             {
                 return false;
@@ -466,7 +670,9 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                 dependencyHash,
                 initialOn,
                 CapturePlacementStates(avatarRoot.transform, placement),
-                parts);
+                parts,
+                shapeChanges,
+                shapeChangeWarnings);
             return true;
         }
 
@@ -491,12 +697,297 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             return other != null && Parts.SequenceEqual(other.Parts);
         }
 
+        internal bool HasEquivalentShapeChangesTo(OutfitPreviewRequest other)
+        {
+            return other != null && ShapeChanges.SequenceEqual(other.ShapeChanges);
+        }
+
+        internal bool HasEquivalentShapeChangeWarningsTo(OutfitPreviewRequest other)
+        {
+            return other != null
+                   && ShapeChangeWarnings.SequenceEqual(other.ShapeChangeWarnings);
+        }
+
         internal bool IsStructurallyEquivalentTo(OutfitPreviewRequest other)
         {
             return IsMirrorStructureEquivalentTo(other)
                    && HasEquivalentMasterSceneTargetsTo(other)
-                   && HasEquivalentPartsTo(other);
+                   && HasEquivalentPartsTo(other)
+                   && HasEquivalentShapeChangesTo(other)
+                   && HasEquivalentShapeChangeWarningsTo(other);
         }
+
+        private static bool TryCreateShapeChangeSnapshots(
+            GameObject sourcePrefab,
+            GameObject avatarRoot,
+            string dependencyHash,
+            IEnumerable<ShapeChangerSettingPlan> masterShapeChanges,
+            IEnumerable<OutfitRendererShapeChangerPlan> outfitRendererShapeChangers,
+            IEnumerable<PartTogglePlan> partToggles,
+            out ImmutableArray<OutfitShapeChangePreviewSnapshot> snapshots,
+            out ImmutableArray<string> warnings,
+            out string error)
+        {
+            var builder = ImmutableArray.CreateBuilder<OutfitShapeChangePreviewSnapshot>();
+            var warningBuilder = ImmutableArray.CreateBuilder<string>();
+            if (!TryAppendShapeChangeSnapshots(
+                    sourcePrefab,
+                    avatarRoot,
+                    dependencyHash,
+                    string.Empty,
+                    true,
+                    false,
+                    default,
+                    -1,
+                    "衣装全体ON",
+                    masterShapeChanges,
+                    builder,
+                    warningBuilder,
+                    out error))
+            {
+                snapshots = ImmutableArray<OutfitShapeChangePreviewSnapshot>.Empty;
+                warnings = ImmutableArray<string>.Empty;
+                return false;
+            }
+
+            var ownerPlans = (outfitRendererShapeChangers
+                              ?? Enumerable.Empty<OutfitRendererShapeChangerPlan>())
+                .ToArray();
+            if (ownerPlans.Any(owner => owner == null))
+            {
+                snapshots = ImmutableArray<OutfitShapeChangePreviewSnapshot>.Empty;
+                warnings = ImmutableArray<string>.Empty;
+                error = "衣装内Shape Changerに不正な所有GameObject設定があります。";
+                return false;
+            }
+
+            var seenOwners = new HashSet<PrefabTargetKey>();
+            var orderedOwners = ownerPlans
+                .OrderBy(owner => owner.OwnerKey, PrefabHierarchyComparer.Instance)
+                .ToArray();
+            for (var ownerIndex = 0; ownerIndex < orderedOwners.Length; ownerIndex++)
+            {
+                var owner = orderedOwners[ownerIndex];
+                if (!seenOwners.Add(owner.OwnerKey)
+                    || !string.Equals(
+                        owner.OwnerKey.DependencyHash,
+                        dependencyHash,
+                        StringComparison.Ordinal))
+                {
+                    snapshots = ImmutableArray<OutfitShapeChangePreviewSnapshot>.Empty;
+                    warnings = ImmutableArray<string>.Empty;
+                    error = "衣装内Shape Changerの所有GameObject参照が重複または古くなっています。";
+                    return false;
+                }
+
+                var ownerObject = owner.OwnerKey.Resolve(sourcePrefab, dependencyHash);
+                if (ownerObject == null || ownerObject.GetComponent<Renderer>() == null)
+                {
+                    snapshots = ImmutableArray<OutfitShapeChangePreviewSnapshot>.Empty;
+                    warnings = ImmutableArray<string>.Empty;
+                    error = "衣装内Shape Changerの所有GameObjectを解決できません。";
+                    return false;
+                }
+
+                if (!TryAppendShapeChangeSnapshots(
+                        sourcePrefab,
+                        avatarRoot,
+                        dependencyHash,
+                        string.Empty,
+                        false,
+                        true,
+                        owner.OwnerKey,
+                        ownerIndex,
+                        string.IsNullOrEmpty(ownerObject.name)
+                            ? "<衣装内GameObject>"
+                            : ownerObject.name,
+                        owner.ShapeChanges,
+                        builder,
+                        warningBuilder,
+                        out error))
+                {
+                    snapshots = ImmutableArray<OutfitShapeChangePreviewSnapshot>.Empty;
+                    warnings = ImmutableArray<string>.Empty;
+                    return false;
+                }
+            }
+
+            foreach (var part in partToggles ?? Enumerable.Empty<PartTogglePlan>())
+            {
+                if (part == null) continue;
+                if (!TryAppendShapeChangeSnapshots(
+                        sourcePrefab,
+                        avatarRoot,
+                        dependencyHash,
+                        part.ItemId,
+                        false,
+                        false,
+                        default,
+                        -1,
+                        string.IsNullOrWhiteSpace(part.Label) ? "<個別項目>" : part.Label,
+                        part.ShapeChanges,
+                        builder,
+                        warningBuilder,
+                        out error))
+                {
+                    snapshots = ImmutableArray<OutfitShapeChangePreviewSnapshot>.Empty;
+                    warnings = ImmutableArray<string>.Empty;
+                    return false;
+                }
+            }
+
+            snapshots = builder.ToImmutable();
+            warnings = warningBuilder.ToImmutable();
+            error = null;
+            return true;
+        }
+
+        private static bool TryAppendShapeChangeSnapshots(
+            GameObject sourcePrefab,
+            GameObject avatarRoot,
+            string dependencyHash,
+            string ownerItemId,
+            bool isMaster,
+            bool hasOutfitOwner,
+            PrefabTargetKey outfitOwnerKey,
+            int ownerHierarchyOrder,
+            string ownerLabel,
+            IEnumerable<ShapeChangerSettingPlan> changes,
+            ImmutableArray<OutfitShapeChangePreviewSnapshot>.Builder builder,
+            ImmutableArray<string>.Builder warnings,
+            out string error)
+        {
+            var changePlans = (changes ?? Enumerable.Empty<ShapeChangerSettingPlan>())
+                .ToArray();
+            var duplicates = new HashSet<string>(StringComparer.Ordinal);
+            var skippedCount = 0;
+            foreach (var change in changePlans)
+            {
+                if (change == null)
+                {
+                    error = $"Shape Changer「{ownerLabel}」に不正な設定があります。";
+                    return false;
+                }
+
+                if (float.IsNaN(change.Value)
+                    || float.IsInfinity(change.Value)
+                    || change.Value < 0f
+                    || change.Value > 100f)
+                {
+                    error = $"Shape Changer「{ownerLabel}」の値は0～100で指定してください。";
+                    return false;
+                }
+
+                if (change.Source != PartTargetSource.OutfitPrefab
+                    && change.Source != PartTargetSource.SceneObject)
+                {
+                    error = $"Shape Changer「{ownerLabel}」の対象種別が不正です。";
+                    return false;
+                }
+
+                SkinnedMeshRenderer renderer = null;
+                if (change.Source == PartTargetSource.OutfitPrefab)
+                {
+                    if (string.IsNullOrEmpty(change.PrefabRendererKey.DependencyHash))
+                    {
+                        skippedCount++;
+                        continue;
+                    }
+
+                    if (!string.Equals(
+                            change.PrefabRendererKey.DependencyHash,
+                            dependencyHash,
+                            StringComparison.Ordinal))
+                    {
+                        error = $"Shape Changer「{ownerLabel}」のPrefab参照が古くなっています。";
+                        return false;
+                    }
+
+                    renderer = change.PrefabRendererKey
+                        .Resolve(sourcePrefab, dependencyHash)
+                        ?.GetComponent<SkinnedMeshRenderer>();
+                }
+                else if (change.Source == PartTargetSource.SceneObject)
+                {
+                    if (change.SceneRendererReference == null)
+                    {
+                        skippedCount++;
+                        continue;
+                    }
+
+                    var sceneObject = change.SceneRendererReference.Resolve();
+                    if (sceneObject == null
+                        || EditorUtility.IsPersistent(sceneObject)
+                        || !sceneObject.scene.IsValid()
+                        || !sceneObject.scene.isLoaded
+                        || (sceneObject != avatarRoot
+                            && !sceneObject.transform.IsChildOf(avatarRoot.transform)))
+                    {
+                        error =
+                            $"Shape Changer「{ownerLabel}」のScene Rendererを対象アバター内で解決できません。";
+                        return false;
+                    }
+
+                    renderer = sceneObject.GetComponent<SkinnedMeshRenderer>();
+                }
+
+                if (renderer == null
+                    || renderer.sharedMesh == null)
+                {
+                    error =
+                        $"Shape Changer「{ownerLabel}」のRendererまたはMeshを解決できません。";
+                    return false;
+                }
+
+                if (string.IsNullOrWhiteSpace(change.ShapeName))
+                {
+                    skippedCount++;
+                    continue;
+                }
+
+                if (renderer.sharedMesh.GetBlendShapeIndex(change.ShapeName) < 0)
+                {
+                    error = $"Shape Changer「{ownerLabel}」のBlendShapeを解決できません。";
+                    return false;
+                }
+
+                var duplicateKey = change.StableRendererId + "\n" + change.ShapeName;
+                if (!duplicates.Add(duplicateKey))
+                {
+                    error =
+                        $"Shape Changer「{ownerLabel}」内で同じRendererとBlendShapeが重複しています。";
+                    return false;
+                }
+
+                builder.Add(new OutfitShapeChangePreviewSnapshot(
+                    ownerItemId,
+                    isMaster,
+                    hasOutfitOwner,
+                    outfitOwnerKey,
+                    ownerHierarchyOrder,
+                    change.Source,
+                    change.PrefabRendererKey,
+                    change.Source == PartTargetSource.SceneObject ? renderer : null,
+                    change.StableRendererId,
+                    change.ShapeName,
+                    change.Value));
+            }
+
+            if (skippedCount > 0)
+            {
+                warnings.Add(
+                    $"Shape Changer「{ownerLabel}」の未指定設定{skippedCount}件をプレビューから除外しています。生成前に設定が必要です。");
+            }
+            else if (hasOutfitOwner && changePlans.Length == 0)
+            {
+                warnings.Add(
+                    $"衣装Renderer表示連動「{ownerLabel}」のShape設定が0件のため、プレビューから除外しています。生成前に設定が必要です。");
+            }
+
+            error = null;
+            return true;
+        }
+
         private static bool TryCreatePartSnapshots(
             GameObject sourcePrefab,
             GameObject avatarRoot,
@@ -578,12 +1069,6 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                     if (target.Source == PartTargetSource.OutfitPrefab)
                     {
                         var targetKey = target.PrefabKey;
-                        if (targetKey.IsRoot)
-                        {
-                            error = "衣装Prefabのルート自体は個別パーツに指定できません。";
-                            return false;
-                        }
-
                         if (!string.Equals(
                                 targetKey.DependencyHash,
                                 dependencyHash,
@@ -729,6 +1214,33 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                         target.Reference?.Resolve(),
                         target.StableId,
                         target.ActiveWhenOn));
+        }
+
+        private sealed class PrefabHierarchyComparer : IComparer<PrefabTargetKey>
+        {
+            internal static PrefabHierarchyComparer Instance { get; } =
+                new PrefabHierarchyComparer();
+
+            public int Compare(PrefabTargetKey left, PrefabTargetKey right)
+            {
+                var dependencyComparison = string.Compare(
+                    left.DependencyHash,
+                    right.DependencyHash,
+                    StringComparison.Ordinal);
+                if (dependencyComparison != 0) return dependencyComparison;
+
+                var commonLength = Math.Min(
+                    left.SiblingIndices.Count,
+                    right.SiblingIndices.Count);
+                for (var index = 0; index < commonLength; index++)
+                {
+                    var siblingComparison = left.SiblingIndices[index]
+                        .CompareTo(right.SiblingIndices[index]);
+                    if (siblingComparison != 0) return siblingComparison;
+                }
+
+                return left.SiblingIndices.Count.CompareTo(right.SiblingIndices.Count);
+            }
         }
 
         private readonly struct ResolvedMasterSceneTarget

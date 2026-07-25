@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using nadena.dev.modular_avatar.core;
 using UnityEngine;
 
 namespace Gokoukotori.SetupOutfitComponent.Editor
@@ -25,6 +26,33 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             IEnumerable<OutfitRendererInfo> blendshapeRenderers,
             IEnumerable<string> errors,
             IEnumerable<string> warnings)
+            : this(
+                sourcePrefab,
+                assetGuid,
+                assetPath,
+                dependencyHash,
+                rootName,
+                targets,
+                partCandidates,
+                blendshapeRenderers,
+                Enumerable.Empty<ExistingShapeChangerInfo>(),
+                errors,
+                warnings)
+        {
+        }
+
+        internal OutfitAnalysis(
+            GameObject sourcePrefab,
+            string assetGuid,
+            string assetPath,
+            string dependencyHash,
+            string rootName,
+            IEnumerable<PrefabTargetInfo> targets,
+            IEnumerable<OutfitPartCandidate> partCandidates,
+            IEnumerable<OutfitRendererInfo> blendshapeRenderers,
+            IEnumerable<ExistingShapeChangerInfo> existingShapeChangers,
+            IEnumerable<string> errors,
+            IEnumerable<string> warnings)
         {
             SourcePrefab = sourcePrefab;
             AssetGuid = assetGuid ?? string.Empty;
@@ -32,8 +60,27 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             DependencyHash = dependencyHash ?? string.Empty;
             RootName = rootName ?? string.Empty;
             Targets = (targets ?? Enumerable.Empty<PrefabTargetInfo>()).ToArray();
+            var rendererOwners = Targets
+                .Where(target => target.IsRendererCandidate)
+                .ToList();
+            if (SourcePrefab != null && SourcePrefab.GetComponent<Renderer>() != null)
+            {
+                rendererOwners.Insert(0, new PrefabTargetInfo(
+                    PrefabTargetKey.FromTransform(
+                        SourcePrefab.transform,
+                        SourcePrefab.transform,
+                        DependencyHash),
+                    SourcePrefab.name,
+                    SourcePrefab.name,
+                    SourcePrefab.activeSelf,
+                    true,
+                    0));
+            }
+
+            RendererOwners = rendererOwners;
             PartCandidates = (partCandidates ?? Enumerable.Empty<OutfitPartCandidate>()).ToArray();
             BlendshapeRenderers = (blendshapeRenderers ?? Enumerable.Empty<OutfitRendererInfo>()).ToList();
+            ExistingShapeChangers = (existingShapeChangers ?? Enumerable.Empty<ExistingShapeChangerInfo>()).ToArray();
             Errors = (errors ?? Enumerable.Empty<string>()).ToArray();
             Warnings = (warnings ?? Enumerable.Empty<string>()).ToArray();
         }
@@ -44,8 +91,10 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
         internal string DependencyHash { get; }
         internal string RootName { get; }
         internal IReadOnlyList<PrefabTargetInfo> Targets { get; }
+        internal IReadOnlyList<PrefabTargetInfo> RendererOwners { get; }
         internal IReadOnlyList<OutfitPartCandidate> PartCandidates { get; }
         internal IReadOnlyList<OutfitRendererInfo> BlendshapeRenderers { get; }
+        internal IReadOnlyList<ExistingShapeChangerInfo> ExistingShapeChangers { get; }
         internal IReadOnlyList<string> Errors { get; }
         internal IReadOnlyList<string> Warnings { get; }
         internal bool IsValid => Errors.Count == 0;
@@ -53,6 +102,11 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
         internal PrefabTargetInfo FindTarget(PrefabTargetKey key)
         {
             return Targets.FirstOrDefault(candidate => candidate.TargetKey.Equals(key));
+        }
+
+        internal PrefabTargetInfo FindRendererOwner(PrefabTargetKey key)
+        {
+            return RendererOwners.FirstOrDefault(candidate => candidate.TargetKey.Equals(key));
         }
 
         internal OutfitRendererInfo FindBlendshapeRenderer(PrefabTargetKey key)
@@ -107,13 +161,15 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             string displayPath,
             string name,
             IEnumerable<string> blendshapeNames,
-            bool hasExistingBlendshapeSync)
+            bool hasExistingBlendshapeSync,
+            bool hasExistingShapeChanger = false)
         {
             TargetKey = targetKey;
             DisplayPath = displayPath ?? string.Empty;
             Name = name ?? string.Empty;
             BlendshapeNames = (blendshapeNames ?? Enumerable.Empty<string>()).ToArray();
             HasExistingBlendshapeSync = hasExistingBlendshapeSync;
+            HasExistingShapeChanger = hasExistingShapeChanger;
         }
 
         internal PrefabTargetKey TargetKey { get; }
@@ -121,6 +177,50 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
         internal string Name { get; }
         internal IReadOnlyList<string> BlendshapeNames { get; }
         internal bool HasExistingBlendshapeSync { get; }
+        internal bool HasExistingShapeChanger { get; }
+    }
+
+    internal sealed class ExistingShapeChangerInfo
+    {
+        internal ExistingShapeChangerInfo(
+            PrefabTargetKey ownerKey,
+            string displayPath,
+            float threshold,
+            bool inverted,
+            IEnumerable<ExistingShapeChangeInfo> shapes)
+        {
+            OwnerKey = ownerKey;
+            DisplayPath = displayPath ?? string.Empty;
+            Threshold = threshold;
+            Inverted = inverted;
+            Shapes = (shapes ?? Enumerable.Empty<ExistingShapeChangeInfo>()).ToArray();
+        }
+
+        internal PrefabTargetKey OwnerKey { get; }
+        internal string DisplayPath { get; }
+        internal float Threshold { get; }
+        internal bool Inverted { get; }
+        internal IReadOnlyList<ExistingShapeChangeInfo> Shapes { get; }
+    }
+
+    internal sealed class ExistingShapeChangeInfo
+    {
+        internal ExistingShapeChangeInfo(
+            string targetPath,
+            string shapeName,
+            ShapeChangeType changeType,
+            float value)
+        {
+            TargetPath = targetPath ?? string.Empty;
+            ShapeName = shapeName ?? string.Empty;
+            ChangeType = changeType;
+            Value = value;
+        }
+
+        internal string TargetPath { get; }
+        internal string ShapeName { get; }
+        internal ShapeChangeType ChangeType { get; }
+        internal float Value { get; }
     }
 
     internal sealed class BlendshapeMappingPlan
@@ -148,6 +248,70 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
         internal PrefabTargetKey LocalRendererKey { get; }
         internal SceneObjectReference SourceRendererReference { get; set; }
         internal List<BlendshapeMappingPlan> Mappings { get; } = new List<BlendshapeMappingPlan>();
+    }
+
+    internal sealed class ShapeChangerSettingPlan
+    {
+        private ShapeChangerSettingPlan(
+            PartTargetSource source,
+            PrefabTargetKey prefabRendererKey,
+            SceneObjectReference sceneRendererReference,
+            string shapeName,
+            float value)
+        {
+            Source = source;
+            PrefabRendererKey = prefabRendererKey;
+            SceneRendererReference = sceneRendererReference;
+            ShapeName = shapeName ?? string.Empty;
+            Value = value;
+        }
+
+        internal PartTargetSource Source { get; set; }
+        internal PrefabTargetKey PrefabRendererKey { get; set; }
+        internal SceneObjectReference SceneRendererReference { get; set; }
+        internal string ShapeName { get; set; }
+        internal float Value { get; set; }
+        internal string StableRendererId => Source == PartTargetSource.OutfitPrefab
+            ? "P:" + PrefabRendererKey
+            : "S:" + (SceneRendererReference?.GlobalObjectId ?? string.Empty);
+
+        internal static ShapeChangerSettingPlan ForPrefab(
+            PrefabTargetKey prefabRendererKey,
+            string shapeName,
+            float value = 100f)
+        {
+            return new ShapeChangerSettingPlan(
+                PartTargetSource.OutfitPrefab,
+                prefabRendererKey,
+                null,
+                shapeName,
+                value);
+        }
+
+        internal static ShapeChangerSettingPlan ForScene(
+            SceneObjectReference sceneRendererReference,
+            string shapeName,
+            float value = 100f)
+        {
+            return new ShapeChangerSettingPlan(
+                PartTargetSource.SceneObject,
+                default,
+                sceneRendererReference ?? throw new ArgumentNullException(nameof(sceneRendererReference)),
+                shapeName,
+                value);
+        }
+    }
+
+    internal sealed class OutfitRendererShapeChangerPlan
+    {
+        internal OutfitRendererShapeChangerPlan(PrefabTargetKey ownerKey)
+        {
+            OwnerKey = ownerKey;
+        }
+
+        internal PrefabTargetKey OwnerKey { get; set; }
+        internal List<ShapeChangerSettingPlan> ShapeChanges { get; } =
+            new List<ShapeChangerSettingPlan>();
     }
 
     internal enum PartTargetSource
@@ -280,6 +444,8 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
         internal string ItemId { get; }
         internal string Label { get; set; }
         internal List<PartToggleTargetPlan> Targets { get; }
+        internal List<ShapeChangerSettingPlan> ShapeChanges { get; } =
+            new List<ShapeChangerSettingPlan>();
         internal bool? InitialOn { get; set; }
 
         internal bool GetTargetActiveWhenOn(PrefabTargetKey target)
@@ -336,6 +502,10 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             new List<MasterSceneTargetPlan>();
         internal List<PartTogglePlan> PartToggles { get; } = new List<PartTogglePlan>();
         internal List<BlendshapeSyncPlan> BlendshapeSyncs { get; } = new List<BlendshapeSyncPlan>();
+        internal List<ShapeChangerSettingPlan> MasterShapeChanges { get; } =
+            new List<ShapeChangerSettingPlan>();
+        internal List<OutfitRendererShapeChangerPlan> OutfitRendererShapeChangers { get; } =
+            new List<OutfitRendererShapeChangerPlan>();
         internal bool AllowDuplicate { get; set; }
     }
 

@@ -1,6 +1,6 @@
 # Setup Outfit Component
 
-`Setup Outfit Component`は、VRChatアバター用の衣装Prefabを解析し、Modular Avatarを使った装着・メニュー・トグル・BlendShape Sync構成をScene上へ生成するEditor専用パッケージです。
+`Setup Outfit Component`は、VRChatアバター用の衣装Prefabを解析し、Modular Avatarを使った装着・メニュー・トグル・BlendShape Sync・Shape Changer Set構成をScene上へ生成するEditor専用パッケージです。
 
 設定中はPrefabやSceneを変更せず、最終確認で「シーンに生成」を実行したときだけSceneへ出力します。元Prefabの保存や変更、独自Runtime Componentの追加は行いません。
 
@@ -19,7 +19,7 @@
 Packages/com.gokoukotori.setup-outfit-component
 ```
 
-配布用VPMリポジトリやGit URLからの導入は、バージョン0.2.4では提供していません。
+配布用VPMリポジトリやGit URLからの導入は、バージョン0.2.5では提供していません。
 
 ## 使い方
 
@@ -29,7 +29,7 @@ Projectウィンドウで衣装Prefabのルートを選択し、右クリック�
 Assets/Setup Outfit Component/衣装セットアップ...
 ```
 
-ウィザードは次の6ステップで構成されています。
+ウィザードは次の7ステップで構成されています。
 
 ### 1. 衣装Prefab
 
@@ -52,11 +52,11 @@ Assets/Setup Outfit Component/衣装セットアップ...
 - SubMenu名、全体トグル名、初期ON/OFFを設定します。
 - 衣装ON時に表示または非表示へ切り替える既存Sceneオブジェクトを指定します。Hierarchyで複数選択してドラッグ＆ドロップすることもでき、新規対象は現行互換の`非表示`で追加されます。
 - ここで指定したすべてのScene対象は、表示設定に関係なくステップ4で個別メニュー項目の候補としても選択できます。
-- `適用プレビューを開く`から専用SceneViewを開き、全体ON/OFFとScene表示設定の見え方を確認できます。
+- `適用プレビューを開く`から専用SceneViewを開き、全体ON/OFFとScene表示設定の見え方を確認できます。ステップ3・4・6のどこから開いても、各ステップで設定済みの内容を同じ累積プレビューへ反映します。
 
 全体トグルは`ON = 衣装を表示`です。Scene対象は衣装ON時だけ指定した表示／非表示へ切り替わり、全体OFF時は元Sceneの`activeSelf`へ戻ります。
 
-適用プレビューはNDMFのカメラ別PreviewSessionを使用し、専用SceneViewだけへ適用されます。元Scene、Prefab、Transform、Selection、Undo、通常のSceneViewやNDMFプレビュー設定は変更しません。プレビュー対象は衣装全体、Scene表示対象、個別パーツの表示状態です。MA標準セットアップ、Merge Armature、BlendShape Sync、最終NDMFビルド後のArmature統合結果は反映しません。
+適用プレビューはNDMFのカメラ別PreviewSessionを使用し、専用SceneViewだけへ適用されます。元Scene、Prefab、Transform、Selection、Undo、通常のSceneViewやNDMFプレビュー設定は変更しません。初回はステップ3の全体トグル`初期ON`設定で開始し、同じウィザードから開き直した場合は衣装全体と個別項目の一時ON/OFFを維持します。プレビュー対象は衣装全体、Scene表示対象、個別パーツの表示状態と、ステップ6で新規設定したShape Changer Setです。衣装Renderer表示連動では付与先GameObjectと祖先の表示状態も反映します。MA標準セットアップ、Merge Armature、BlendShape Sync、既存／外部Shape Changer、最終NDMFビルド後のArmature統合結果は反映しません。
 
 `表示`はGameObjectの`activeSelf`を有効化するため、対象に含まれるPhysBone、Constraintなども実際の生成結果では有効になり得ます。視覚プレビューは`MeshRenderer`／`SkinnedMeshRenderer`だけを対象とし、スクリプトの`OnEnable`やコンポーネントの実動作は再現しません。`Renderer.enabled=false`のRendererや、非表示の祖先の下にあるRendererは表示設定でも描画されません。
 
@@ -69,8 +69,8 @@ Assets/Setup Outfit Component/衣装セットアップ...
 - 項目はウィザードに表示された上から下の順でメニューへ生成されます。▲／▼ボタンまたは左端のハンドルのドラッグ＆ドロップで並べ替えられ、新しい項目は末尾へ追加されます。
 - 新しいPrefabターゲットのON時状態は既定で`非表示`、ステップ3のScene対象を個別項目へ追加したときは既定で`表示`です。どちらも対象行で変更できます。
 - メニュー初期状態の`自動（OFF）`は常に初期OFFとして生成します。必要な項目だけ初期ONを明示できます。
-- `個別パーツプレビューを開く`から専用SceneViewを開き、各項目を`メニューON`／`メニューOFF`へ切り替えて見え方を確認できます。ステップ4から開いた場合、衣装全体はプレビュー内だけONで開始します。
-- プレビュー内の一時ON/OFFは項目IDごとに保持されるため、表示名や並び順を変更しても維持されます。`個別項目を初期状態に戻す`で全項目をウィザードの初期状態へ戻せます。
+- `個別パーツプレビューを開く`から同じ累積プレビューを開き、各項目を`メニューON`／`メニューOFF`へ切り替えて見え方を確認できます。ステップ4から開いても衣装全体を強制的にONにはしません。
+- プレビュー内の一時ON/OFFは項目IDごとに保持されるため、表示名や並び順を変更した場合や同じウィザードから開き直した場合も維持されます。`個別項目を初期状態に戻す`を明示的に実行した場合だけ、既存の全項目をウィザードの初期状態へ戻します。
 - プレビューウィンドウ内の操作は、ウィザードの初期状態、生成計画、元Prefab、Sceneへ書き戻しません。
 - `Prefab内ターゲット`でチェックした対象は、専用SceneView上のワイヤー枠とPrefabルートからの相対パスで確認できます。対象自身またはその子孫にある、現在表示中のRendererだけが枠表示されます。
 - ターゲットのチェック操作だけではプレビューを自動起動しません。先に`個別パーツプレビューを開く`を実行すると、その後のチェック変更が開いているプレビューへ反映されます。
@@ -98,7 +98,25 @@ Assets/Setup Outfit Component/衣装セットアップ...
 - Remap Curveの編集には対応せず、生成時は`0 -> 0、100 -> 100`の恒等変換を使用します。
 - 入力Prefabに既存のMA Blendshape Syncがある場合はその設定を保持し、同じRendererへの新規追加を拒否します。
 
-### 6. 確認
+### 6. Shape Changer
+
+- 衣装全体ONまたはステップ4の個別メニュー項目を制御元として、MA Shape Changerの`Set`設定を追加します。
+- `衣装Renderer表示連動`では、Rendererが直接付いている衣装Prefab内GameObjectを付与先として選択し、そのGameObjectと祖先がアクティブな間だけSetを適用できます。PrefabルートもRendererが直接付いている場合だけ候補になります。
+- 付与先候補はPrefab Hierarchy順で表示され、相対パス、元の`activeSelf`、Renderer種別、表示状態へ関係するステップ4項目を確認できます。付与先と、実際にBlendShapeを変更する`Shape対象`は別々に指定します。
+- 対象アバター内のScene `SkinnedMeshRenderer`、または衣装Prefab内の`SkinnedMeshRenderer`を指定できます。
+- Rendererを選ぶと、そのMeshに存在するBlendShape名をMesh上の順序で選択できます。衣装側のBlendShape名は設定前から表示されます。
+- Set値は`0～100`です。`ChangeType=Set`、`Inverted=false`、`Threshold=0.01`で生成します。
+- 同じ制御元内の同一Renderer＋Shapeは重複指定できません。異なる個別項目が同じShapeを操作する場合は、同時ON中でメニューの最も下にある項目を優先します。
+- 生成予定のBlendShape Syncの同期元Shapeを操作した場合は、Modular Avatarの最終処理で同期先へ伝播します。同じ同期先を直接操作する二重経路は生成できません。
+- 入力Prefabに既存のMA Shape Changerがある場合は変更せず保持し、コンポーネント位置、対象、Shape、Set／Delete、値、Thresholdを読み取り専用で表示します。新規設定との競合は警告として生成を許可し、最終結果はMAのHierarchy順に依存します。
+- `Shape Changerプレビューを開く`から同じ累積プレビューを開き、新規設定したSet値と全体／個別メニュー状態を確認できます。ステップ6から開いても衣装全体を強制的にONにはしません。
+- Shape操作対象RendererまたはBlendShape名が未指定の行は専用プレビューから除外され、完成済みの設定と衣装表示だけを確認できます。未指定行は設定から削除・補完されず、ステップ7への移動と生成では引き続きエラーになります。
+
+複数のShape Changerが同じShapeへSetする場合は、衣装全体、衣装Renderer付与先のPrefab Hierarchy順、個別メニュー順の順に評価され、Hierarchyで後ろにある有効な所有者が優先されます。所有者GameObjectまたは祖先が非アクティブになると、その所有者のSet寄与だけを解放し、次の有効な所有者または元のBlendShape Weightへ戻ります。`Renderer.enabled=false`だけではMA Shape Changerは無効になりません。
+
+専用プレビューは新規に設定したShape Changer Setと衣装Renderer所有者のactive階層を反映します。`Renderer.enabled=false`は描画を抑制しますが、Shape Changerの有効条件としては扱いません。既存／外部Shape Changer、BlendShape Syncによる伝播、Animator、MA Shape Changerの`Delete`、最終NDMF競合は再現しません。
+
+### 7. 確認
 
 - 生成階層、Prefab接続、参照、Override、警告とエラーを確認します。
 - エラーがなくなるまで生成は実行できません。
@@ -121,6 +139,8 @@ Assets/Setup Outfit Component/衣装セットアップ...
 
 BlendShape Syncを設定した場合は、対象となる衣装RendererのGameObjectへMA Blendshape Syncが追加されます。
 
+Shape Changerを設定した場合は、全体設定を既存の全体トグルGameObjectへ、個別設定を対応する個別Menu Item GameObjectへ追加します。衣装Renderer表示連動は生成したPrefabインスタンス内の選択GameObjectへAdded Component Overrideとして追加し、元Prefabは変更しません。Shape Changer専用の補助GameObjectは生成しません。
+
 ## 非破壊動作とUndo
 
 - 元Prefab、Prefab Variant、依存アセットを変更しません。
@@ -142,14 +162,16 @@ BlendShape Syncを設定した場合は、対象となる衣装RendererのGameOb
 - AvatarDescriptorまたはMissing Scriptを含む衣装Prefab
 - 対象アバター外の配置先や参照先
 - 同一項目内の重複ターゲット、個別パーツの祖先・子孫競合、未解決の参照
+- 衣装Renderer表示連動の付与先に、Rendererが直接付いていないGameObjectを指定した場合
 - 出力名の衝突
 - 明示許可していない同一Prefabの重複配置
 
-バージョン0.2.4では、次の機能は対象外です。
+バージョン0.2.5では、次の機能は対象外です。
 
-- 適用プレビューでのMA標準セットアップ、Merge Armature、BlendShape Sync、最終NDMFビルド結果の再現
+- 適用プレビューでのMA標準セットアップ、Merge Armature、BlendShape Sync伝播、既存／外部Shape Changer、最終NDMFビルド結果の再現
 - BlendShapeのRemap Curve編集
-- MA Shape Changer、Material Swapの自動生成
+- MA Shape Changerの`Delete`、Threshold編集、Inverted編集
+- MA Material Swapの自動生成
 - 元PrefabのComponent／GameObject削除
 - Prefabアセット保存、再生成マニフェスト、設定プロファイル
 - アバター固有の配置先、下着、靴などの自動推定

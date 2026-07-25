@@ -75,7 +75,9 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             if (avatar != null)
             {
                 ValidateBlendshapeSyncs(plan, avatar, messages);
+                ValidateShapeChangers(plan, avatar, placement, messages);
             }
+
             if (!Enum.IsDefined(typeof(OutfitSetupMode), plan.SetupMode))
             {
                 AddError(messages, "SETUP_MODE", "装着モードが不正です。");
@@ -596,6 +598,405 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                     }
                 }
             }
+        }
+
+        private static void ValidateShapeChangers(
+            OutfitSetupPlan plan,
+            GameObject avatar,
+            GameObject placement,
+            ICollection<ValidationMessage> messages)
+        {
+            var generatedSyncDestinations = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var sync in plan.BlendshapeSyncs.Where(sync => sync != null))
+            {
+                foreach (var mapping in sync.Mappings.Where(mapping => mapping != null))
+                {
+                    generatedSyncDestinations.Add(
+                        BuildShapeKey("P:" + sync.LocalRendererKey, mapping.LocalShape));
+                }
+            }
+
+            ValidateShapeChangerOwner(
+                plan,
+                avatar,
+                placement,
+                "衣装全体ON",
+                plan.MasterShapeChanges,
+                generatedSyncDestinations,
+                messages);
+
+            foreach (var part in plan.PartToggles.Where(part => part != null))
+            {
+                ValidateShapeChangerOwner(
+                    plan,
+                    avatar,
+                    placement,
+                    $"個別項目「{part.Label}」",
+                    part.ShapeChanges,
+                    generatedSyncDestinations,
+                    messages);
+            }
+
+            var seenRendererOwners = new HashSet<string>(StringComparer.Ordinal);
+            for (var index = 0; index < plan.OutfitRendererShapeChangers.Count; index++)
+            {
+                var rendererOwner = plan.OutfitRendererShapeChangers[index];
+                if (rendererOwner == null)
+                {
+                    AddError(messages, "SHAPE_CHANGER_RENDERER_OWNER_NULL",
+                        $"衣装Renderer制御{index + 1}の設定が不正です。");
+                    continue;
+                }
+
+                var ownerStableId = "P:" + rendererOwner.OwnerKey;
+                if (!seenRendererOwners.Add(ownerStableId))
+                {
+                    AddError(messages, "SHAPE_CHANGER_RENDERER_OWNER_DUPLICATE",
+                        "同じ衣装Renderer GameObjectへ複数のShape Changer owner設定を作成できません。");
+                }
+
+                GameObject ownerObject = null;
+                var ownerInfo = plan.Analysis.FindRendererOwner(rendererOwner.OwnerKey);
+                if (!string.Equals(
+                        rendererOwner.OwnerKey.DependencyHash,
+                        plan.DependencyHash,
+                        StringComparison.Ordinal)
+                    || (ownerObject = rendererOwner.OwnerKey.Resolve(
+                        plan.SourcePrefab,
+                        plan.DependencyHash)) == null
+                    || ownerInfo == null)
+                {
+                    AddError(messages, "SHAPE_CHANGER_RENDERER_OWNER_STALE",
+                        "Shape Changer ownerが解析時の衣装Prefabまたはdependency hashと一致しません。");
+                }
+                else if (ownerObject.GetComponent<Renderer>() == null)
+                {
+                    AddError(messages, "SHAPE_CHANGER_RENDERER_OWNER_COMPONENT",
+                        "Shape Changer ownerにはRendererが直接付属している必要があります。");
+                }
+
+                if (rendererOwner.ShapeChanges.Count == 0)
+                {
+                    AddError(messages, "SHAPE_CHANGER_RENDERER_OWNER_EMPTY",
+                        "衣装Renderer ownerのShape ChangerにSet設定がありません。");
+                }
+
+                if (plan.Analysis.ExistingShapeChangers.Any(existing =>
+                        existing.OwnerKey.Equals(rendererOwner.OwnerKey)))
+                {
+                    AddWarning(messages, "SHAPE_CHANGER_RENDERER_OWNER_EXISTING_COMPONENT",
+                        "選択した衣装Renderer GameObjectには既存のMA Shape Changerがあります。"
+                        + "新規コンポーネントはAdded Component Overrideとして追加され、"
+                        + "同じShapeを操作する場合の最終結果はMAのHierarchy走査順に依存します。");
+                }
+
+                if (ownerObject != null
+                    && HasUncoveredInactiveOwnerHierarchy(plan, ownerObject, plan.SourcePrefab))
+                {
+                    AddWarning(messages, "SHAPE_CHANGER_RENDERER_OWNER_INACTIVE",
+                        "Shape Changer ownerまたは祖先は入力Prefabで非アクティブですが、"
+                        + "ステップ4にON時表示するowner／祖先ターゲットがありません。"
+                        + "外部MAまたはAnimatorで有効化されない限りSetは適用されません。");
+                }
+
+                if (ownerObject != null
+                    && HasExistingReactiveOwnerHierarchy(ownerObject, plan.SourcePrefab))
+                {
+                    AddWarning(messages, "SHAPE_CHANGER_RENDERER_OWNER_REACTIVE_ANCESTOR",
+                        "Shape Changer ownerまたは祖先に既存のMA Menu Item／MA Object Toggleがあります。"
+                        + "既存Reactive Componentによる追加条件や競合は専用プレビューでは再現されません。");
+                }
+
+                var ownerDisplayName = ownerInfo != null
+                    ? $"衣装Renderer「{ownerInfo.DisplayPath}」"
+                    : $"衣装Renderer owner {index + 1}";
+                ValidateShapeChangerOwner(
+                    plan,
+                    avatar,
+                    placement,
+                    ownerDisplayName,
+                    rendererOwner.ShapeChanges,
+                    generatedSyncDestinations,
+                    messages);
+            }
+        }
+
+        private static bool HasUncoveredInactiveOwnerHierarchy(
+            OutfitSetupPlan plan,
+            GameObject owner,
+            GameObject prefabRoot)
+        {
+            var activatedKeys = new HashSet<PrefabTargetKey>(
+                plan.PartToggles
+                    .Where(part => part != null)
+                    .SelectMany(part => part.Targets)
+                    .Where(target => target != null
+                                     && target.Source == PartTargetSource.OutfitPrefab
+                                     && target.ActiveWhenOn)
+                    .Select(target => target.PrefabKey));
+
+            var cursor = owner != null ? owner.transform : null;
+            while (cursor != null)
+            {
+                if (!cursor.gameObject.activeSelf)
+                {
+                    var cursorKey = PrefabTargetKey.FromTransform(
+                        prefabRoot.transform,
+                        cursor,
+                        plan.DependencyHash);
+                    if (!activatedKeys.Contains(cursorKey)) return true;
+                }
+
+                if (cursor.gameObject == prefabRoot) break;
+                cursor = cursor.parent;
+            }
+
+            return false;
+        }
+
+        private static bool HasExistingReactiveOwnerHierarchy(
+            GameObject owner,
+            GameObject prefabRoot)
+        {
+            var cursor = owner != null ? owner.transform : null;
+            while (cursor != null)
+            {
+                if (cursor.GetComponent<ModularAvatarMenuItem>() != null
+                    || cursor.GetComponent<ModularAvatarObjectToggle>() != null)
+                {
+                    return true;
+                }
+
+                if (cursor.gameObject == prefabRoot) break;
+                cursor = cursor.parent;
+            }
+
+            return false;
+        }
+
+        private static void ValidateShapeChangerOwner(
+            OutfitSetupPlan plan,
+            GameObject avatar,
+            GameObject placement,
+            string ownerDisplayName,
+            IReadOnlyList<ShapeChangerSettingPlan> settings,
+            ISet<string> generatedSyncDestinations,
+            ICollection<ValidationMessage> messages)
+        {
+            if (settings == null) return;
+
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            for (var index = 0; index < settings.Count; index++)
+            {
+                var setting = settings[index];
+                if (setting == null)
+                {
+                    AddError(messages, "SHAPE_CHANGER_NULL",
+                        $"{ownerDisplayName}のShape Changer設定{index + 1}が不正です。");
+                    continue;
+                }
+
+                if (!Enum.IsDefined(typeof(PartTargetSource), setting.Source))
+                {
+                    AddError(messages, "SHAPE_CHANGER_SOURCE",
+                        $"{ownerDisplayName}のShape Changer対象種別が不正です。");
+                    continue;
+                }
+
+                GameObject targetObject = null;
+                SkinnedMeshRenderer renderer = null;
+                if (setting.Source == PartTargetSource.OutfitPrefab)
+                {
+                    if (!string.Equals(
+                            setting.PrefabRendererKey.DependencyHash,
+                            plan.DependencyHash,
+                            StringComparison.Ordinal)
+                        || (targetObject = setting.PrefabRendererKey.Resolve(
+                            plan.SourcePrefab,
+                            plan.DependencyHash)) == null
+                        || plan.Analysis.FindBlendshapeRenderer(setting.PrefabRendererKey) == null)
+                    {
+                        AddError(messages, "SHAPE_CHANGER_PREFAB_STALE",
+                            $"{ownerDisplayName}の衣装Rendererが解析時のPrefabまたはdependency hashと一致しません。");
+                    }
+                }
+                else
+                {
+                    targetObject = ResolveSceneReference(
+                        setting.SceneRendererReference,
+                        $"{ownerDisplayName}のShape Changer対象Renderer",
+                        "SHAPE_CHANGER_SCENE",
+                        messages);
+                    if (targetObject != null
+                        && targetObject != avatar
+                        && !targetObject.transform.IsChildOf(avatar.transform))
+                    {
+                        AddError(messages, "SHAPE_CHANGER_SCENE_OUTSIDE_AVATAR",
+                            "Shape ChangerのScene対象Rendererは対象アバター自身またはその子孫である必要があります。");
+                    }
+                }
+
+                if (targetObject != null)
+                {
+                    renderer = targetObject.GetComponent<SkinnedMeshRenderer>();
+                    if (renderer == null)
+                    {
+                        AddError(messages, "SHAPE_CHANGER_RENDERER",
+                            $"{ownerDisplayName}の対象GameObjectにSkinnedMeshRendererがありません。");
+                    }
+                    else if (renderer.sharedMesh == null)
+                    {
+                        AddError(messages, "SHAPE_CHANGER_MESH",
+                            $"{ownerDisplayName}の対象SkinnedMeshRendererにMeshがありません。");
+                    }
+                }
+
+                if (string.IsNullOrWhiteSpace(setting.ShapeName))
+                {
+                    AddError(messages, "SHAPE_CHANGER_SHAPE_EMPTY",
+                        $"{ownerDisplayName}のBlendShape名を選択してください。");
+                }
+                else if (renderer != null
+                         && renderer.sharedMesh != null
+                         && renderer.sharedMesh.GetBlendShapeIndex(setting.ShapeName) < 0)
+                {
+                    AddError(messages, "SHAPE_CHANGER_SHAPE_MISSING",
+                        $"{ownerDisplayName}の対象MeshにBlendShape「{setting.ShapeName}」がありません。");
+                }
+
+                if (float.IsNaN(setting.Value)
+                    || float.IsInfinity(setting.Value)
+                    || setting.Value < 0f
+                    || setting.Value > 100f)
+                {
+                    AddError(messages, "SHAPE_CHANGER_VALUE",
+                        $"{ownerDisplayName}のSet値は0～100の有限値である必要があります。");
+                }
+
+                var shapeKey = BuildShapeKey(setting.StableRendererId, setting.ShapeName);
+                if (!seen.Add(shapeKey))
+                {
+                    AddError(messages, "SHAPE_CHANGER_DUPLICATE",
+                        $"{ownerDisplayName}で同じRendererとBlendShapeを複数回指定できません。");
+                }
+
+                if (generatedSyncDestinations.Contains(shapeKey))
+                {
+                    AddError(messages, "SHAPE_CHANGER_BLENDSYNC_DOUBLE_PATH",
+                        "生成予定のMA Blendshape Sync同期先ShapeをShape Changerから直接操作できません。同期元Shapeだけを操作してください。");
+                }
+
+                if (targetObject == null || renderer == null || string.IsNullOrWhiteSpace(setting.ShapeName))
+                {
+                    continue;
+                }
+
+                if (HasExistingBlendshapeSyncDestinationConflict(
+                        targetObject,
+                        setting.ShapeName))
+                {
+                    AddWarning(messages, "SHAPE_CHANGER_EXISTING_BLENDSYNC_CONFLICT",
+                        "Shape Changer対象は既存のMA Blendshape Sync同期先と重複します。既存設定は保持され、最終結果はNDMF処理順に依存します。");
+                }
+
+                if (HasExistingShapeChangerConflict(
+                        plan,
+                        avatar,
+                        placement,
+                        setting,
+                        targetObject,
+                        setting.ShapeName))
+                {
+                    AddWarning(messages, "SHAPE_CHANGER_EXISTING_CONFLICT",
+                        "同じRendererとBlendShapeを操作する既存のMA Shape Changerがあります。既存設定は保持され、最終結果はHierarchy順に依存します。");
+                }
+            }
+        }
+
+        private static bool HasExistingBlendshapeSyncDestinationConflict(
+            GameObject targetObject,
+            string shapeName)
+        {
+            if (targetObject == null) return false;
+            var sync = targetObject.GetComponent<ModularAvatarBlendshapeSync>();
+            return sync != null
+                   && sync.Bindings != null
+                   && sync.Bindings.Any(binding =>
+                       string.Equals(binding.LocalBlendshape, shapeName, StringComparison.Ordinal));
+        }
+
+        private static bool HasExistingShapeChangerConflict(
+            OutfitSetupPlan plan,
+            GameObject avatar,
+            GameObject placement,
+            ShapeChangerSettingPlan setting,
+            GameObject targetObject,
+            string shapeName)
+        {
+            foreach (var changer in avatar.GetComponentsInChildren<ModularAvatarShapeChanger>(true))
+            {
+                if (changer == null || changer.Shapes == null) continue;
+                foreach (var changedShape in changer.Shapes)
+                {
+                    if (changedShape?.Object?.Get(changer) == targetObject
+                        && string.Equals(changedShape.ShapeName, shapeName, StringComparison.Ordinal))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            var plannedTargetPath = GetPlannedAvatarPath(
+                plan,
+                avatar,
+                placement,
+                setting,
+                targetObject);
+            if (string.IsNullOrEmpty(plannedTargetPath)) return false;
+
+            return plan.Analysis.ExistingShapeChangers
+                .SelectMany(changer => changer.Shapes)
+                .Any(shape =>
+                    string.Equals(shape.TargetPath, plannedTargetPath, StringComparison.Ordinal)
+                    && string.Equals(shape.ShapeName, shapeName, StringComparison.Ordinal));
+        }
+
+        private static string GetPlannedAvatarPath(
+            OutfitSetupPlan plan,
+            GameObject avatar,
+            GameObject placement,
+            ShapeChangerSettingPlan setting,
+            GameObject targetObject)
+        {
+            if (avatar == null || targetObject == null) return string.Empty;
+            if (setting.Source == PartTargetSource.SceneObject)
+            {
+                return AnimationUtility.CalculateTransformPath(targetObject.transform, avatar.transform);
+            }
+
+            if (placement == null) return string.Empty;
+            var placementPath = AnimationUtility.CalculateTransformPath(
+                placement.transform,
+                avatar.transform);
+            var prefabPath = AnimationUtility.CalculateTransformPath(
+                targetObject.transform,
+                plan.SourcePrefab.transform);
+            return string.Join(
+                "/",
+                new[]
+                {
+                    placementPath,
+                    plan.OutputName,
+                    plan.SourcePrefab.name,
+                    prefabPath,
+                }.Where(segment => !string.IsNullOrEmpty(segment)));
+        }
+
+        private static string BuildShapeKey(string rendererStableId, string shapeName)
+        {
+            return (rendererStableId ?? string.Empty)
+                   + "\u001F"
+                   + (shapeName ?? string.Empty);
         }
 
         private static GameObject ResolveSceneReference(

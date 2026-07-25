@@ -14,7 +14,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
         private static readonly string[] StepNames =
         {
             "1. 衣装Prefab", "2. 配置先", "3. 装着と全体動作", "4. 個別パーツ",
-            "5. BlendShape Sync", "6. 確認",
+            "5. BlendShape Sync", "6. Shape Changer", "7. 確認",
         };
 
         private static readonly string[] SetupModeLabels =
@@ -50,6 +50,12 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             new Dictionary<int, SceneObjectReference>();
         private readonly Dictionary<PrefabTargetKey, SkinnedMeshRenderer> _blendshapeSourceRenderers =
             new Dictionary<PrefabTargetKey, SkinnedMeshRenderer>();
+        private readonly Dictionary<ShapeChangerSettingPlan, SkinnedMeshRenderer> _shapeChangerSceneRenderers =
+            new Dictionary<ShapeChangerSettingPlan, SkinnedMeshRenderer>();
+        private IReadOnlyList<OutfitRendererInfo> _shapeChangerPrefabRenderers =
+            Array.Empty<OutfitRendererInfo>();
+        private readonly Dictionary<PrefabTargetKey, string> _shapeChangerOwnerRendererTypes =
+            new Dictionary<PrefabTargetKey, string>();
         private readonly BlendshapeUiCache _blendshapeUiCache = new BlendshapeUiCache();
         private readonly SceneReferenceRefreshGate _sceneReferenceRefreshGate =
             new SceneReferenceRefreshGate();
@@ -88,11 +94,23 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             _analysis = OutfitAnalyzer.Analyze(sourcePrefab);
             _plan = new OutfitSetupPlan(_analysis);
             _blendshapeUiCache.SetAnalysis(_analysis);
+            _shapeChangerPrefabRenderers = _analysis.BlendshapeRenderers
+                .Where(renderer => renderer.BlendshapeNames.Count > 0)
+                .ToArray();
+            _shapeChangerOwnerRendererTypes.Clear();
+            foreach (var owner in _analysis.RendererOwners)
+            {
+                var ownerObject = owner.TargetKey.Resolve(sourcePrefab, _analysis.DependencyHash);
+                var renderer = ownerObject != null ? ownerObject.GetComponent<Renderer>() : null;
+                _shapeChangerOwnerRendererTypes[owner.TargetKey] =
+                    renderer != null ? renderer.GetType().Name : "<Renderer未解決>";
+            }
             _step = 0;
             _scrollPosition = Vector2.zero;
             _selectedPartTargets.Clear();
             _sceneTargetReferencesByInstanceId.Clear();
             _blendshapeSourceRenderers.Clear();
+            _shapeChangerSceneRenderers.Clear();
             _sceneTargetRows.Clear();
             _localReferenceError = null;
             _sceneTargetDropMessage = null;
@@ -177,7 +195,8 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                 case 2: DrawMasterStep(); break;
                 case 3: DrawPartsStep(); break;
                 case 4: DrawBlendshapeStep(); break;
-                case 5: DrawReviewStep(); break;
+                case 5: DrawShapeChangerStep(); break;
+                case 6: DrawReviewStep(); break;
             }
             EditorGUILayout.EndScrollView();
             DrawNavigation();
@@ -418,7 +437,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             using (new EditorGUI.DisabledScope(!CanAttemptApplyPreview()))
             {
                 if (GUILayout.Button("個別パーツプレビューを開く", GUILayout.Height(30f)))
-                    OpenApplyPreview(true);
+                    OpenApplyPreview();
             }
             EditorGUILayout.HelpBox(
                 "プレビュー内のメニューON／OFFは見え方確認用の一時状態です。この画面の初期状態設定には書き戻しません。",
@@ -539,6 +558,8 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                         }
                         if (GUILayout.Button("削除", GUILayout.Width(52f)))
                         {
+                            foreach (var shapeChange in part.ShapeChanges)
+                                _shapeChangerSceneRenderers.Remove(shapeChange);
                             _plan.PartToggles.Remove(part);
                             UpdateApplyPreviewIfOpen();
                             InvalidateReviewValidation();
@@ -785,6 +806,11 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
 
         private void DrawOutfitBlendshapeNames(OutfitRendererInfo renderer)
         {
+            if (renderer == null)
+            {
+                EditorGUILayout.HelpBox("衣装Rendererを解決できません。", MessageType.Warning);
+                return;
+            }
             EditorGUILayout.LabelField(
                 "衣装BlendShape（" + renderer.BlendshapeNames.Count + "件）",
                 EditorStyles.miniBoldLabel);
@@ -957,6 +983,536 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             return _blendshapeUiCache.GetRendererLabel(renderer);
         }
 
+        private void DrawShapeChangerStep()
+        {
+            EditorGUILayout.LabelField("MA Shape Changer Set", EditorStyles.boldLabel);
+            EditorGUILayout.HelpBox(
+                "衣装全体ON、衣装Renderer GameObjectの表示状態、または個別メニュー項目のON状態に連動して、アバター側／衣装側のBlendShapeを0～100の値へ設定します。Delete、Threshold編集、Inverted編集には対応しません。",
+                MessageType.Info);
+
+            using (new EditorGUI.DisabledScope(!CanAttemptApplyPreview()))
+            {
+                if (GUILayout.Button("Shape Changerプレビューを開く", GUILayout.Height(30f)))
+                    OpenApplyPreview();
+            }
+            EditorGUILayout.HelpBox(
+                "専用プレビューは新規に設定したSetだけを反映します。衣装Renderer表示連動はGameObjectのactiveSelfと祖先状態を使用します。既存／外部Shape Changer、BlendShape Sync伝播、Animator、Delete、最終NDMF競合は再現しません。",
+                MessageType.None);
+            EditorGUILayout.HelpBox(
+                "Shape操作対象RendererまたはBlendShape名が未指定の行は、専用プレビューから除外します。完成済みの設定と衣装表示は引き続きプレビューできますが、未指定行はステップ7への移動と生成ではエラーになります。",
+                MessageType.Warning);
+
+            DrawExistingShapeChangers();
+
+            var sceneRenderers = GetAvatarBlendshapeRenderers();
+            DrawOutfitRendererShapeChangerOwners(sceneRenderers, _shapeChangerPrefabRenderers);
+
+            EditorGUILayout.Space(8f);
+            EditorGUILayout.LabelField("メニュー状態に連動", EditorStyles.boldLabel);
+            DrawShapeChangerOwner(
+                "衣装全体ON",
+                "全体トグルがONの間に適用します。",
+                _plan.MasterShapeChanges,
+                sceneRenderers,
+                _shapeChangerPrefabRenderers);
+
+            for (var partIndex = 0; partIndex < _plan.PartToggles.Count; partIndex++)
+            {
+                var part = _plan.PartToggles[partIndex];
+                DrawShapeChangerOwner(
+                    (partIndex + 1) + ". " + EmptyFallback(part.Label, "<個別項目>"),
+                    "メニューON時に適用します。同じShapeを複数項目が操作する場合は下側を優先します。",
+                    part.ShapeChanges,
+                    sceneRenderers,
+                    _shapeChangerPrefabRenderers);
+            }
+
+            DrawLocalReferenceError();
+        }
+
+        private void DrawOutfitRendererShapeChangerOwners(
+            IReadOnlyList<SkinnedMeshRenderer> sceneRenderers,
+            IReadOnlyList<OutfitRendererInfo> prefabRenderers)
+        {
+            EditorGUILayout.Space(8f);
+            EditorGUILayout.LabelField("衣装Renderer表示連動", EditorStyles.boldLabel);
+            EditorGUILayout.HelpBox(
+                "選択した衣装Renderer GameObjectへMA Shape Changerを追加します。GameObject自身と祖先がアクティブな間だけSetが有効になり、非アクティブになるとこの設定の寄与を解放します。次の有効な所有者、または元のBlendShape Weightが使用されます。",
+                MessageType.Info);
+            EditorGUILayout.HelpBox(
+                "Renderer.enabledはShape Changerの有効条件ではありません。GameObjectのactiveSelfと祖先状態が有効条件です。Renderer.enabled=falseはプレビュー上の描画だけを抑制します。",
+                MessageType.Warning);
+
+            using (new EditorGUI.DisabledScope(_analysis.RendererOwners.Count == 0))
+            {
+                if (GUILayout.Button("衣装Renderer所有者を追加"))
+                    ShowOutfitRendererShapeChangerOwnerMenu();
+            }
+
+            if (_plan.OutfitRendererShapeChangers.Count == 0)
+            {
+                EditorGUILayout.LabelField("表示連動設定", "なし");
+                return;
+            }
+
+            foreach (var owner in EnumerateOutfitRendererShapeChangerOwnersInHierarchy().ToArray())
+            {
+                DrawOutfitRendererShapeChangerOwner(owner, sceneRenderers, prefabRenderers);
+            }
+        }
+
+        private void DrawOutfitRendererShapeChangerOwner(
+            OutfitRendererShapeChangerPlan owner,
+            IReadOnlyList<SkinnedMeshRenderer> sceneRenderers,
+            IReadOnlyList<OutfitRendererInfo> prefabRenderers)
+        {
+            var ownerInfo = _analysis.FindRendererOwner(owner.OwnerKey);
+            using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
+            {
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    EditorGUILayout.LabelField(
+                        ownerInfo?.DisplayPath ?? "<付与先未解決>",
+                        EditorStyles.boldLabel);
+                    GUILayout.FlexibleSpace();
+                    if (GUILayout.Button("削除", GUILayout.Width(52f)))
+                    {
+                        foreach (var setting in owner.ShapeChanges)
+                            _shapeChangerSceneRenderers.Remove(setting);
+                        _plan.OutfitRendererShapeChangers.Remove(owner);
+                        ShapeChangerPlanChanged();
+                        GUIUtility.ExitGUI();
+                    }
+                }
+
+                DrawOutfitRendererShapeChangerOwnerPopup(owner, ownerInfo);
+                ownerInfo = _analysis.FindRendererOwner(owner.OwnerKey);
+                EditorGUILayout.LabelField(
+                    "Prefab相対パス",
+                    ownerInfo?.DisplayPath ?? "<付与先未解決>");
+                EditorGUILayout.LabelField(
+                    "基準activeSelf",
+                    ownerInfo == null ? "<未解決>" : ownerInfo.ActiveSelf ? "ON" : "OFF");
+                EditorGUILayout.LabelField(
+                    "Renderer種別",
+                    GetShapeChangerOwnerRendererType(owner.OwnerKey));
+                EditorGUILayout.LabelField(
+                    "関連するStep 4項目",
+                    GetRelatedPartToggleDescription(owner.OwnerKey));
+                EditorGUILayout.LabelField(
+                    "有効条件",
+                    "付与先GameObjectとすべての祖先がアクティブ",
+                    EditorStyles.wordWrappedMiniLabel);
+
+                EditorGUILayout.Space(3f);
+                EditorGUILayout.LabelField("Shape対象", EditorStyles.miniBoldLabel);
+                DrawShapeChangerSettings(
+                    owner.ShapeChanges,
+                    sceneRenderers,
+                    prefabRenderers);
+                if (owner.ShapeChanges.Count == 0)
+                    EditorGUILayout.HelpBox("Shape対象を1件以上追加してください。", MessageType.Warning);
+            }
+        }
+
+        private void ShowOutfitRendererShapeChangerOwnerMenu()
+        {
+            var menu = new GenericMenu();
+            foreach (var candidate in _analysis.RendererOwners)
+            {
+                var captured = candidate;
+                var alreadyUsed = _plan.OutfitRendererShapeChangers.Any(owner =>
+                    owner.OwnerKey.Equals(captured.TargetKey));
+                var label = GetShapeChangerOwnerMenuLabel(captured);
+                if (alreadyUsed)
+                {
+                    menu.AddDisabledItem(new GUIContent(label), true);
+                    continue;
+                }
+
+                menu.AddItem(new GUIContent(label), false, () =>
+                {
+                    _plan.OutfitRendererShapeChangers.Add(
+                        new OutfitRendererShapeChangerPlan(captured.TargetKey));
+                    ShapeChangerPlanChanged();
+                    Repaint();
+                });
+            }
+            menu.ShowAsContext();
+        }
+
+        private void DrawOutfitRendererShapeChangerOwnerPopup(
+            OutfitRendererShapeChangerPlan owner,
+            PrefabTargetInfo currentOwner)
+        {
+            var rect = EditorGUILayout.GetControlRect();
+            rect = EditorGUI.PrefixLabel(rect, new GUIContent("付与先"));
+            var content = new GUIContent(
+                currentOwner != null
+                    ? GetShapeChangerOwnerMenuLabel(currentOwner)
+                    : "<付与先未解決>");
+            if (!EditorGUI.DropdownButton(rect, content, FocusType.Keyboard, EditorStyles.popup))
+                return;
+
+            var menu = new GenericMenu();
+            foreach (var candidate in _analysis.RendererOwners)
+            {
+                var captured = candidate;
+                var usedByOther = _plan.OutfitRendererShapeChangers.Any(other =>
+                    !ReferenceEquals(other, owner)
+                    && other.OwnerKey.Equals(captured.TargetKey));
+                var selected = owner.OwnerKey.Equals(captured.TargetKey);
+                var label = GetShapeChangerOwnerMenuLabel(captured);
+                if (usedByOther)
+                {
+                    menu.AddDisabledItem(new GUIContent(label), false);
+                    continue;
+                }
+
+                menu.AddItem(new GUIContent(label), selected, () =>
+                {
+                    owner.OwnerKey = captured.TargetKey;
+                    ShapeChangerPlanChanged();
+                    Repaint();
+                });
+            }
+            menu.DropDown(rect);
+        }
+
+        private string GetShapeChangerOwnerMenuLabel(PrefabTargetInfo owner)
+        {
+            if (owner == null) return "<付与先未解決>";
+            var rendererType = GetShapeChangerOwnerRendererType(owner.TargetKey);
+            var baseState = owner.ActiveSelf ? string.Empty : " [初期OFF]";
+            return owner.DisplayPath + " [" + rendererType + "]" + baseState;
+        }
+
+        private string GetShapeChangerOwnerRendererType(PrefabTargetKey ownerKey)
+        {
+            return _shapeChangerOwnerRendererTypes.TryGetValue(ownerKey, out var rendererType)
+                ? rendererType
+                : "<Renderer未解決>";
+        }
+
+        private string GetRelatedPartToggleDescription(PrefabTargetKey ownerKey)
+        {
+            var relatedItems = new List<string>();
+            for (var partIndex = 0; partIndex < _plan.PartToggles.Count; partIndex++)
+            {
+                var part = _plan.PartToggles[partIndex];
+                var relatedTargets = part.Targets
+                    .Where(target => target != null
+                                     && target.Source == PartTargetSource.OutfitPrefab
+                                     && (target.PrefabKey.Equals(ownerKey)
+                                         || target.PrefabKey.IsAncestorOf(ownerKey)))
+                    .ToArray();
+                if (relatedTargets.Length == 0) continue;
+                var states = string.Join(", ", relatedTargets.Select(target =>
+                    target.ActiveWhenOn ? "ON時表示" : "ON時非表示"));
+                relatedItems.Add(
+                    (partIndex + 1) + ". "
+                    + EmptyFallback(part.Label, "<個別項目>")
+                    + " (" + states + ")");
+            }
+
+            return relatedItems.Count == 0
+                ? "なし（PrefabのactiveSelfと祖先状態に従う）"
+                : string.Join(" / ", relatedItems);
+        }
+
+        private IEnumerable<OutfitRendererShapeChangerPlan>
+            EnumerateOutfitRendererShapeChangerOwnersInHierarchy()
+        {
+            if (_plan == null || _analysis == null) yield break;
+            foreach (var candidate in _analysis.RendererOwners)
+            {
+                var owner = _plan.OutfitRendererShapeChangers.FirstOrDefault(item =>
+                    item != null && item.OwnerKey.Equals(candidate.TargetKey));
+                if (owner != null) yield return owner;
+            }
+
+            foreach (var owner in _plan.OutfitRendererShapeChangers)
+            {
+                if (owner != null && _analysis.FindRendererOwner(owner.OwnerKey) == null)
+                    yield return owner;
+            }
+        }
+
+        private void DrawExistingShapeChangers()
+        {
+            EditorGUILayout.Space(8f);
+            EditorGUILayout.LabelField("入力Prefabの既存Shape Changer", EditorStyles.boldLabel);
+            if (_analysis.ExistingShapeChangers.Count == 0)
+            {
+                EditorGUILayout.LabelField("設定", "なし");
+                return;
+            }
+
+            EditorGUILayout.HelpBox(
+                "既存コンポーネントは変更せず、そのまま保持します。新規設定との競合は警告として表示し、最終結果はMAのHierarchy順に依存します。Prefab解析時に解決できないAvatar相対パスは表示だけを行います。",
+                MessageType.Info);
+            foreach (var existing in _analysis.ExistingShapeChangers)
+            {
+                using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
+                {
+                    EditorGUILayout.LabelField(existing.DisplayPath, EditorStyles.boldLabel);
+                    EditorGUILayout.LabelField("Threshold", existing.Threshold.ToString("0.#####"));
+                    EditorGUILayout.LabelField("Inverted", existing.Inverted ? "true" : "false");
+                    if (existing.Shapes.Count == 0)
+                    {
+                        EditorGUILayout.LabelField("Shape", "なし");
+                        continue;
+                    }
+
+                    foreach (var shape in existing.Shapes)
+                    {
+                        var targetPath = EmptyFallback(shape.TargetPath, "<参照未解決>");
+                        EditorGUILayout.LabelField(
+                            targetPath + " / " + EmptyFallback(shape.ShapeName, "<Shape未指定>"),
+                            shape.ChangeType + "  " + shape.Value.ToString("0.###"));
+                    }
+                }
+            }
+        }
+
+        private void DrawShapeChangerOwner(
+            string title,
+            string description,
+            IList<ShapeChangerSettingPlan> settings,
+            IReadOnlyList<SkinnedMeshRenderer> sceneRenderers,
+            IReadOnlyList<OutfitRendererInfo> prefabRenderers)
+        {
+            EditorGUILayout.Space(8f);
+            using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
+            {
+                EditorGUILayout.LabelField(title, EditorStyles.boldLabel);
+                EditorGUILayout.LabelField(description, EditorStyles.wordWrappedMiniLabel);
+                DrawShapeChangerSettings(settings, sceneRenderers, prefabRenderers);
+            }
+        }
+
+        private void DrawShapeChangerSettings(
+            IList<ShapeChangerSettingPlan> settings,
+            IReadOnlyList<SkinnedMeshRenderer> sceneRenderers,
+            IReadOnlyList<OutfitRendererInfo> prefabRenderers)
+        {
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                using (new EditorGUI.DisabledScope(sceneRenderers.Count == 0))
+                {
+                    if (GUILayout.Button("アバターShape対象を追加"))
+                        ShowSceneShapeChangerRendererMenu(settings, sceneRenderers);
+                }
+                using (new EditorGUI.DisabledScope(prefabRenderers.Count == 0))
+                {
+                    if (GUILayout.Button("衣装Shape対象を追加"))
+                        ShowPrefabShapeChangerRendererMenu(settings, prefabRenderers);
+                }
+            }
+
+            if (settings.Count == 0)
+            {
+                EditorGUILayout.LabelField("新規設定", "なし");
+                return;
+            }
+
+            for (var index = 0; index < settings.Count; index++)
+                DrawShapeChangerSetting(settings, index);
+        }
+
+        private void DrawShapeChangerSetting(
+            IList<ShapeChangerSettingPlan> settings,
+            int index)
+        {
+            var setting = settings[index];
+            using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
+            {
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    EditorGUILayout.LabelField(
+                        setting.Source == PartTargetSource.SceneObject
+                            ? "Shape対象：アバター側"
+                            : "Shape対象：衣装Prefab側",
+                        EditorStyles.miniBoldLabel);
+                    GUILayout.FlexibleSpace();
+                    if (GUILayout.Button("削除", GUILayout.Width(52f)))
+                    {
+                        _shapeChangerSceneRenderers.Remove(setting);
+                        settings.RemoveAt(index);
+                        ShapeChangerPlanChanged();
+                        GUIUtility.ExitGUI();
+                    }
+                }
+
+                BlendshapeOptionSet options;
+                if (setting.Source == PartTargetSource.SceneObject)
+                {
+                    _shapeChangerSceneRenderers.TryGetValue(setting, out var renderer);
+                    EditorGUI.BeginChangeCheck();
+                    var nextRenderer = (SkinnedMeshRenderer)EditorGUILayout.ObjectField(
+                        "Shape対象Renderer", renderer, typeof(SkinnedMeshRenderer), true);
+                    if (EditorGUI.EndChangeCheck())
+                    {
+                        if (nextRenderer == null)
+                        {
+                            _shapeChangerSceneRenderers.Remove(setting);
+                            setting.SceneRendererReference = null;
+                        }
+                        else
+                        {
+                            _shapeChangerSceneRenderers[setting] = nextRenderer;
+                            setting.SceneRendererReference = TryCreateSceneReference(
+                                nextRenderer.gameObject,
+                                "Shape Changer対象 " + nextRenderer.name);
+                        }
+                        setting.ShapeName = string.Empty;
+                        RefreshSceneReferencesAfterChange();
+                        ShapeChangerPlanChanged();
+                    }
+                    options = _blendshapeUiCache.GetSourceOptions(nextRenderer);
+                    EditorGUILayout.LabelField("BlendShape候補", options.Names.Count + "件");
+                }
+                else
+                {
+                    var rendererInfo = _analysis.FindBlendshapeRenderer(setting.PrefabRendererKey);
+                    DrawPrefabShapeChangerRendererPopup(setting, rendererInfo);
+                    rendererInfo = _analysis.FindBlendshapeRenderer(setting.PrefabRendererKey);
+                    options = _blendshapeUiCache.GetLocalOptions(rendererInfo);
+                    DrawOutfitBlendshapeNames(rendererInfo);
+                }
+
+                DrawShapeChangerShapePopup(setting, options);
+                EditorGUI.BeginChangeCheck();
+                var nextValue = EditorGUILayout.Slider("Set値", setting.Value, 0f, 100f);
+                if (EditorGUI.EndChangeCheck())
+                {
+                    setting.Value = nextValue;
+                    ShapeChangerPlanChanged();
+                }
+
+                if (string.IsNullOrWhiteSpace(setting.ShapeName))
+                    EditorGUILayout.HelpBox("BlendShapeを選択してください。", MessageType.Warning);
+            }
+        }
+
+        private void DrawPrefabShapeChangerRendererPopup(
+            ShapeChangerSettingPlan setting,
+            OutfitRendererInfo currentRenderer)
+        {
+            var content = new GUIContent(currentRenderer?.DisplayPath ?? "<Renderer未指定>");
+            var rect = EditorGUILayout.GetControlRect();
+            rect = EditorGUI.PrefixLabel(rect, new GUIContent("Shape対象Renderer"));
+            if (!EditorGUI.DropdownButton(rect, content, FocusType.Keyboard, EditorStyles.popup)) return;
+
+            var menu = new GenericMenu();
+            foreach (var renderer in _shapeChangerPrefabRenderers)
+            {
+                var captured = renderer;
+                menu.AddItem(
+                    new GUIContent(captured.DisplayPath),
+                    captured.TargetKey.Equals(setting.PrefabRendererKey),
+                    () =>
+                    {
+                        setting.PrefabRendererKey = captured.TargetKey;
+                        setting.ShapeName = string.Empty;
+                        ShapeChangerPlanChanged();
+                        Repaint();
+                    });
+            }
+            menu.DropDown(rect);
+        }
+
+        private void DrawShapeChangerShapePopup(
+            ShapeChangerSettingPlan setting,
+            BlendshapeOptionSet options)
+        {
+            var current = setting.ShapeName;
+            var content = new GUIContent(
+                string.IsNullOrEmpty(current) ? "<選択してください>" : current);
+            var rect = EditorGUILayout.GetControlRect();
+            rect = EditorGUI.PrefixLabel(rect, new GUIContent("BlendShape"));
+            if (!EditorGUI.DropdownButton(rect, content, FocusType.Keyboard, EditorStyles.popup)) return;
+
+            var menu = new GenericMenu();
+            menu.AddItem(
+                new GUIContent("<選択してください>"),
+                string.IsNullOrEmpty(current),
+                () => SetShapeChangerShape(setting, string.Empty));
+            foreach (var shapeName in options.Names)
+            {
+                var captured = shapeName;
+                menu.AddItem(
+                    new GUIContent(captured),
+                    string.Equals(current, captured, StringComparison.Ordinal),
+                    () => SetShapeChangerShape(setting, captured));
+            }
+            menu.DropDown(rect);
+        }
+
+        private void SetShapeChangerShape(ShapeChangerSettingPlan setting, string shapeName)
+        {
+            setting.ShapeName = shapeName ?? string.Empty;
+            ShapeChangerPlanChanged();
+            Repaint();
+        }
+
+        private void ShowSceneShapeChangerRendererMenu(
+            IList<ShapeChangerSettingPlan> settings,
+            IReadOnlyList<SkinnedMeshRenderer> renderers)
+        {
+            var menu = new GenericMenu();
+            foreach (var renderer in renderers)
+            {
+                var captured = renderer;
+                menu.AddItem(new GUIContent(GetRendererLabel(captured)), false, () =>
+                {
+                    var reference = TryCreateSceneReference(
+                        captured.gameObject,
+                        "Shape Changer対象 " + captured.name);
+                    if (reference == null) return;
+                    var setting = ShapeChangerSettingPlan.ForScene(reference, string.Empty);
+                    settings.Add(setting);
+                    _shapeChangerSceneRenderers[setting] = captured;
+                    ShapeChangerPlanChanged();
+                    Repaint();
+                });
+            }
+            menu.ShowAsContext();
+        }
+
+        private void ShowPrefabShapeChangerRendererMenu(
+            IList<ShapeChangerSettingPlan> settings,
+            IReadOnlyList<OutfitRendererInfo> renderers)
+        {
+            var menu = new GenericMenu();
+            foreach (var renderer in renderers)
+            {
+                var captured = renderer;
+                menu.AddItem(new GUIContent(captured.DisplayPath), false, () =>
+                {
+                    settings.Add(ShapeChangerSettingPlan.ForPrefab(captured.TargetKey, string.Empty));
+                    ShapeChangerPlanChanged();
+                    Repaint();
+                });
+            }
+            menu.ShowAsContext();
+        }
+
+        private void ShapeChangerPlanChanged()
+        {
+            InvalidateReviewValidation();
+            UpdateApplyPreviewIfOpen();
+        }
+
+        private string GetShapeChangerRendererDisplayName(ShapeChangerSettingPlan setting)
+        {
+            if (setting == null) return "<未解決>";
+            if (setting.Source == PartTargetSource.OutfitPrefab)
+                return _analysis.FindBlendshapeRenderer(setting.PrefabRendererKey)?.DisplayPath
+                       ?? "<衣装Renderer未解決>";
+            return setting.SceneRendererReference?.DisplayName ?? "<アバターRenderer未解決>";
+        }
+
         private void DrawReviewStep()
         {
             EditorGUILayout.LabelField("生成予定", EditorStyles.boldLabel);
@@ -1033,6 +1589,59 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             }
 
             EditorGUILayout.Space(8f);
+            EditorGUILayout.LabelField("Shape Changer Set", EditorStyles.boldLabel);
+            EditorGUILayout.LabelField("生成設定", "Set / Inverted=false / Threshold=0.01");
+            EditorGUILayout.LabelField(
+                "競合解決",
+                "全体 → 衣装Renderer付与先（Prefab Hierarchy順） → 個別項目（メニュー順）");
+            EditorGUILayout.LabelField(
+                "有効所有者の優先",
+                "Hierarchyで後ろの有効な所有者を優先。非アクティブな所有者はSet寄与を解放");
+            if (_analysis.ExistingShapeChangers.Count == 0
+                && _plan.MasterShapeChanges.Count == 0
+                && _plan.OutfitRendererShapeChangers.All(owner =>
+                    owner == null || owner.ShapeChanges.Count == 0)
+                && _plan.PartToggles.All(part => part.ShapeChanges.Count == 0))
+            {
+                EditorGUILayout.LabelField("設定", "なし");
+            }
+            foreach (var existing in _analysis.ExistingShapeChangers)
+            {
+                EditorGUILayout.LabelField(existing.DisplayPath, "既存MA Shape Changerを保持");
+                foreach (var shape in existing.Shapes)
+                {
+                    EditorGUILayout.LabelField(
+                        "  " + EmptyFallback(shape.TargetPath, "<参照未解決>")
+                        + " / " + EmptyFallback(shape.ShapeName, "<Shape未指定>"),
+                        shape.ChangeType + "  " + shape.Value.ToString("0.###"));
+                }
+            }
+            DrawShapeChangerReviewOwner("衣装全体ON", _plan.MasterShapeChanges);
+            foreach (var owner in EnumerateOutfitRendererShapeChangerOwnersInHierarchy())
+            {
+                var ownerInfo = _analysis.FindRendererOwner(owner.OwnerKey);
+                var ownerPath = ownerInfo?.DisplayPath ?? "<付与先未解決>";
+                EditorGUILayout.LabelField(
+                    "衣装Renderer表示連動: " + ownerPath,
+                    "Prefab Override: Added Component");
+                EditorGUILayout.LabelField(
+                    "  基準activeSelf / Renderer",
+                    (ownerInfo == null ? "<未解決>" : ownerInfo.ActiveSelf ? "ON" : "OFF")
+                    + " / " + GetShapeChangerOwnerRendererType(owner.OwnerKey));
+                EditorGUILayout.LabelField(
+                    "  関連するStep 4項目",
+                    GetRelatedPartToggleDescription(owner.OwnerKey));
+                DrawShapeChangerReviewOwner("  Shape対象", owner.ShapeChanges);
+            }
+            for (var partIndex = 0; partIndex < _plan.PartToggles.Count; partIndex++)
+            {
+                var part = _plan.PartToggles[partIndex];
+                DrawShapeChangerReviewOwner(
+                    (partIndex + 1) + ". " + EmptyFallback(part.Label, "<個別項目>"),
+                    part.ShapeChanges);
+            }
+
+            EditorGUILayout.Space(8f);
             EditorGUILayout.LabelField("検証", EditorStyles.boldLabel);
             EditorGUI.BeginChangeCheck();
             var allowDuplicate = EditorGUILayout.ToggleLeft(
@@ -1057,6 +1666,30 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             {
                 if (GUILayout.Button("シーンに生成", GUILayout.Height(36f))) Generate();
             }
+        }
+
+        private void DrawShapeChangerReviewOwner(
+            string ownerLabel,
+            IEnumerable<ShapeChangerSettingPlan> settings)
+        {
+            var settingArray = (settings ?? Enumerable.Empty<ShapeChangerSettingPlan>()).ToArray();
+            if (settingArray.Length == 0) return;
+            EditorGUILayout.LabelField(ownerLabel, EditorStyles.miniBoldLabel);
+            foreach (var setting in settingArray)
+            {
+                EditorGUILayout.LabelField(
+                    "  [" + GetShapeChangerTargetSourceLabel(setting) + "] "
+                    + GetShapeChangerRendererDisplayName(setting)
+                    + " / " + EmptyFallback(setting.ShapeName, "<Shape未指定>"),
+                    "Set " + setting.Value.ToString("0.###"));
+            }
+        }
+
+        private static string GetShapeChangerTargetSourceLabel(ShapeChangerSettingPlan setting)
+        {
+            return setting?.Source == PartTargetSource.SceneObject
+                ? "アバター"
+                : "衣装Prefab";
         }
 
         private void DrawHierarchyPreview()
@@ -1096,7 +1729,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                     {
                         if (GUILayout.Button("次へ", GUILayout.Width(100f)))
                         {
-                            if (_step == 4) PrepareReviewValidation();
+                            if (_step == 5) PrepareReviewValidation();
                             _step++;
                             _scrollPosition = Vector2.zero;
                         }
@@ -1128,9 +1761,42 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                                && sync.Mappings.Count > 0
                                && sync.Mappings.All(mapping => !string.IsNullOrWhiteSpace(mapping.SourceShape)
                                    && !string.IsNullOrWhiteSpace(mapping.LocalShape)));
+                case 5:
+                    return string.IsNullOrEmpty(_localReferenceError)
+                           && _plan.OutfitRendererShapeChangers.All(owner =>
+                               owner != null
+                               && _analysis.FindRendererOwner(owner.OwnerKey) != null
+                               && owner.ShapeChanges.Count > 0)
+                           && EnumerateShapeChangerSettings().All(IsShapeChangerSettingComplete);
                 default:
                     return true;
             }
+        }
+
+        private IEnumerable<ShapeChangerSettingPlan> EnumerateShapeChangerSettings()
+        {
+            if (_plan == null) return Enumerable.Empty<ShapeChangerSettingPlan>();
+            return _plan.MasterShapeChanges
+                .Concat(_plan.OutfitRendererShapeChangers
+                    .Where(owner => owner != null)
+                    .SelectMany(owner => owner.ShapeChanges))
+                .Concat(_plan.PartToggles.SelectMany(part => part.ShapeChanges));
+        }
+
+        private static bool IsShapeChangerSettingComplete(ShapeChangerSettingPlan setting)
+        {
+            if (setting == null
+                || string.IsNullOrWhiteSpace(setting.ShapeName)
+                || float.IsNaN(setting.Value)
+                || float.IsInfinity(setting.Value)
+                || setting.Value < 0f
+                || setting.Value > 100f)
+            {
+                return false;
+            }
+
+            return setting.Source == PartTargetSource.OutfitPrefab
+                   || setting.SceneRendererReference != null;
         }
 
         private void RefreshAvatars(bool selectAutomatic)
@@ -1154,6 +1820,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             if (selectAutomatic && _avatars.Count == 1) SetSelectedAvatar(_avatars[0]);
             else
             {
+                RemoveSceneShapeChangerSettings();
                 _selectedAvatar = null;
                 _placement = null;
                 RefreshSceneReferencesAfterChange();
@@ -1166,6 +1833,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             {
                 _plan?.BlendshapeSyncs.Clear();
                 _blendshapeSourceRenderers.Clear();
+                RemoveSceneShapeChangerSettings();
                 _blendshapeUiCache.InvalidateAvatar();
             }
             _selectedAvatar = avatar;
@@ -1209,6 +1877,8 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                 _plan != null && _plan.MasterDefaultOn,
                 _analysis,
                 _plan != null ? _plan.PartToggles : null,
+                _plan != null ? _plan.MasterShapeChanges : null,
+                _plan != null ? _plan.OutfitRendererShapeChangers : null,
                 out request,
                 out error);
         }
@@ -1241,11 +1911,11 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             return true;
         }
 
-        private void OpenApplyPreview(bool forceOutfitOn = false)
+        private void OpenApplyPreview()
         {
             if (TryCreateApplyPreviewRequest(out var request, out var error))
             {
-                OutfitApplyPreviewWindow.OpenOrUpdate(this, request, forceOutfitOn);
+                OutfitApplyPreviewWindow.OpenOrUpdate(this, request);
                 NotifyHighlightedPartTargetsChanged();
                 return;
             }
@@ -1317,7 +1987,42 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                     "BlendShape同期元 " + sourceRenderer.name);
             }
 
+            foreach (var setting in EnumerateShapeChangerSettings()
+                         .Where(candidate => candidate != null
+                                             && candidate.Source == PartTargetSource.SceneObject))
+            {
+                if (!_shapeChangerSceneRenderers.TryGetValue(setting, out var renderer)
+                    || renderer == null)
+                {
+                    setting.SceneRendererReference = null;
+                    continue;
+                }
+
+                setting.SceneRendererReference = TryCreateSceneReference(
+                    renderer.gameObject,
+                    "Shape Changer対象 " + renderer.name);
+            }
+
             InvalidateReviewValidation();
+        }
+
+        private void RemoveSceneShapeChangerSettings()
+        {
+            if (_plan == null) return;
+            _plan.MasterShapeChanges.RemoveAll(
+                setting => setting?.Source == PartTargetSource.SceneObject);
+            foreach (var part in _plan.PartToggles)
+            {
+                part.ShapeChanges.RemoveAll(
+                    setting => setting?.Source == PartTargetSource.SceneObject);
+            }
+            foreach (var owner in _plan.OutfitRendererShapeChangers)
+            {
+                if (owner == null) continue;
+                owner.ShapeChanges.RemoveAll(
+                    setting => setting?.Source == PartTargetSource.SceneObject);
+            }
+            _shapeChangerSceneRenderers.Clear();
         }
 
         private void PrepareReviewValidation()

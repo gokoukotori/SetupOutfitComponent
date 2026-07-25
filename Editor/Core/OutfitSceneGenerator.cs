@@ -12,6 +12,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
     internal sealed class OutfitSceneGenerator
     {
         private const string UndoName = "衣装セットアップを生成";
+        private const float ShapeChangerThreshold = 0.01f;
 
         private readonly IOutfitSetupAdapter _setupAdapter;
         private readonly IOutfitSetupValidator _validator;
@@ -70,6 +71,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                 var partBindings = ResolvePartBindings(plan, outfitInstance);
                 var blendshapeBindings = ResolveBlendshapeBindings(plan, outfitInstance);
                 var partToggleComponents = new List<PartToggleComponentBinding>();
+                var partOwnerObjects = new Dictionary<string, GameObject>(StringComparer.Ordinal);
                 if (partBindings.Count > 0)
                 {
                     Undo.AddComponent<ModularAvatarMenuGroup>(outfitInstance);
@@ -88,12 +90,19 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                         InitializeMenuItem(item, binding.Plan.Label, PortableControlType.Toggle, binding.InitialOn);
                         var toggle = Undo.AddComponent<ModularAvatarObjectToggle>(itemObject);
                         partToggleComponents.Add(new PartToggleComponentBinding(
+                            binding.Plan,
                             toggle,
                             binding.Targets));
+                        partOwnerObjects.Add(binding.Plan.ItemId, itemObject);
                     }
                 }
 
                 var blendshapeSyncComponents = CreateBlendshapeSyncComponents(blendshapeBindings);
+                var shapeChangerComponents = CreateShapeChangerComponents(
+                    plan,
+                    masterObject,
+                    partOwnerObjects,
+                    outfitInstance);
 
                 SetPrefabInstanceActive(outfitInstance, false);
 
@@ -117,6 +126,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
 
                 ValidateGeneratedResult(plan, avatar, generatedRoot, outfitInstance, masterToggle,
                     masterSceneTargets, partToggleComponents, blendshapeSyncComponents,
+                    shapeChangerComponents,
                     sourceHashBefore, sceneTargetStates);
 
                 Undo.SetCurrentGroupName(UndoName);
@@ -212,9 +222,21 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                 .Where(target => target != null
                                  && target.Source == PartTargetSource.SceneObject)
                 .Select(target => target.SceneReference?.Resolve());
+            var shapeTargets = plan.MasterShapeChanges
+                .Concat(plan.PartToggles
+                    .Where(part => part != null)
+                    .SelectMany(part => part.ShapeChanges))
+                .Concat(plan.OutfitRendererShapeChangers
+                    .Where(owner => owner != null)
+                    .SelectMany(owner => owner.ShapeChanges))
+                .Where(setting => setting != null)
+                .Select(setting => setting.Source == PartTargetSource.OutfitPrefab
+                    ? setting.PrefabRendererKey.Resolve(plan.SourcePrefab, plan.DependencyHash)
+                    : setting.SceneRendererReference?.Resolve());
             return masterSceneTargets
                 .Select(target => target.GameObject)
                 .Concat(partSceneTargets)
+                .Concat(shapeTargets)
                 .Where(target => target != null)
                 .Distinct()
                 .Select(target => new SceneTargetState(target))
@@ -297,6 +319,146 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             }
 
             return result;
+        }
+
+        private static List<ShapeChangerComponentBinding> CreateShapeChangerComponents(
+            OutfitSetupPlan plan,
+            GameObject masterOwner,
+            IReadOnlyDictionary<string, GameObject> partOwnerObjects,
+            GameObject outfitInstance)
+        {
+            var result = new List<ShapeChangerComponentBinding>();
+            if (plan.MasterShapeChanges.Count > 0)
+            {
+                result.Add(CreateShapeChangerComponent(
+                    masterOwner,
+                    plan.MasterShapeChanges,
+                    outfitInstance,
+                    plan.DependencyHash));
+            }
+
+            foreach (var part in plan.PartToggles.Where(part => part != null))
+            {
+                if (part.ShapeChanges.Count == 0) continue;
+                if (!partOwnerObjects.TryGetValue(part.ItemId, out var owner) || owner == null)
+                {
+                    throw new OutfitGenerationException(
+                        $"個別項目「{part.Label}」のShape Changer生成先を解決できません。");
+                }
+
+                result.Add(CreateShapeChangerComponent(
+                    owner,
+                    part.ShapeChanges,
+                    outfitInstance,
+                    plan.DependencyHash));
+            }
+
+            var seenRendererOwners = new HashSet<GameObject>();
+            foreach (var rendererOwner in plan.OutfitRendererShapeChangers)
+            {
+                if (rendererOwner == null)
+                {
+                    throw new OutfitGenerationException(
+                        "衣装Renderer Shape Changer owner設定を解決できません。");
+                }
+
+                var owner = rendererOwner.OwnerKey.Resolve(
+                    outfitInstance,
+                    plan.DependencyHash);
+                if (owner == null || owner.GetComponent<Renderer>() == null)
+                {
+                    throw new OutfitGenerationException(
+                        "Shape Changer ownerを生成した衣装Renderer GameObjectへ解決できません。");
+                }
+
+                if (!seenRendererOwners.Add(owner))
+                {
+                    throw new OutfitGenerationException(
+                        "同じ衣装Renderer GameObjectへ複数のShape Changer owner設定があります。");
+                }
+
+                result.Add(CreateShapeChangerComponent(
+                    owner,
+                    rendererOwner.ShapeChanges,
+                    outfitInstance,
+                    plan.DependencyHash,
+                    true));
+            }
+
+            return result;
+        }
+
+        private static ShapeChangerComponentBinding CreateShapeChangerComponent(
+            GameObject owner,
+            IReadOnlyList<ShapeChangerSettingPlan> settings,
+            GameObject outfitInstance,
+            string dependencyHash,
+            bool requiresAddedComponentOverride = false)
+        {
+            if (owner == null || settings == null || settings.Count == 0)
+            {
+                throw new OutfitGenerationException("Shape Changerの生成先または設定がありません。");
+            }
+
+            var resolvedShapes = settings.Select(setting =>
+            {
+                if (setting == null)
+                {
+                    throw new OutfitGenerationException("Shape Changer設定を解決できません。");
+                }
+
+                var targetObject = setting.Source == PartTargetSource.OutfitPrefab
+                    ? setting.PrefabRendererKey.Resolve(outfitInstance, dependencyHash)
+                    : setting.SceneRendererReference?.Resolve();
+                var renderer = targetObject != null
+                    ? targetObject.GetComponent<SkinnedMeshRenderer>()
+                    : null;
+                if (renderer == null
+                    || renderer.sharedMesh == null
+                    || renderer.sharedMesh.GetBlendShapeIndex(setting.ShapeName) < 0)
+                {
+                    throw new OutfitGenerationException(
+                        "Shape Changer対象Renderer、Mesh、またはBlendShapeを解決できません。");
+                }
+
+                if (float.IsNaN(setting.Value)
+                    || float.IsInfinity(setting.Value)
+                    || setting.Value < 0f
+                    || setting.Value > 100f)
+                {
+                    throw new OutfitGenerationException("Shape ChangerのSet値が0～100の有限値ではありません。");
+                }
+
+                return new ResolvedShapeChange(setting, renderer);
+            }).ToArray();
+
+            var component = Undo.AddComponent<ModularAvatarShapeChanger>(owner);
+            Undo.RecordObject(component, UndoName);
+            component.Inverted = false;
+            component.Threshold = ShapeChangerThreshold;
+            component.Shapes = resolvedShapes.Select(resolved =>
+            {
+                var reference = new AvatarObjectReference();
+                reference.Set(resolved.Renderer.gameObject);
+                return new ChangedShape
+                {
+                    Object = reference,
+                    ShapeName = resolved.Setting.ShapeName,
+                    ChangeType = ShapeChangeType.Set,
+                    Value = resolved.Setting.Value,
+                };
+            }).ToList();
+            EditorUtility.SetDirty(component);
+            if (PrefabUtility.IsPartOfPrefabInstance(component))
+            {
+                PrefabUtility.RecordPrefabInstancePropertyModifications(component);
+            }
+
+            return new ShapeChangerComponentBinding(
+                component,
+                owner,
+                resolvedShapes,
+                requiresAddedComponentOverride);
         }
 
         private static void InitializeMenuItem(
@@ -394,6 +556,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             IReadOnlyList<ResolvedMasterSceneTarget> masterSceneTargets,
             IReadOnlyList<PartToggleComponentBinding> partToggles,
             IReadOnlyList<BlendshapeSyncComponentBinding> blendshapeSyncs,
+            IReadOnlyList<ShapeChangerComponentBinding> shapeChangers,
             string sourceHashBefore,
             IReadOnlyList<SceneTargetState> sceneTargetStates)
         {
@@ -421,6 +584,11 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                 ValidateBlendshapeSync(blendshapeSync, avatar);
             }
 
+            foreach (var shapeChanger in shapeChangers)
+            {
+                ValidateShapeChanger(shapeChanger, avatar);
+            }
+
             var sourceHashAfter = AssetDatabase.GetAssetDependencyHash(plan.SourceAssetPath).ToString();
             if (!string.Equals(sourceHashBefore, sourceHashAfter, StringComparison.Ordinal)
                 || !string.Equals(sourceHashAfter, plan.DependencyHash, StringComparison.Ordinal))
@@ -433,7 +601,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                 if (!sceneTargetState.IsUnchanged())
                 {
                     throw new OutfitGenerationException(
-                        "生成中にScene対象が変更されました。");
+                        "生成中にScene対象またはShape Changer対象Rendererが変更されました。");
                 }
             }
         }
@@ -541,6 +709,65 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             }
         }
 
+        private static void ValidateShapeChanger(
+            ShapeChangerComponentBinding generated,
+            GameObject avatar)
+        {
+            var component = generated.Component;
+            if (component == null || component.gameObject != generated.Owner)
+            {
+                throw new OutfitGenerationException("生成したMA Shape Changerの配置先が一致しません。");
+            }
+
+            if (generated.RequiresAddedComponentOverride
+                && (!PrefabUtility.IsPartOfPrefabInstance(generated.Owner)
+                    || !PrefabUtility.IsAddedComponentOverride(component)
+                    || PrefabUtility.GetCorrespondingObjectFromSource(generated.Owner) == null))
+            {
+                throw new OutfitGenerationException(
+                    "衣装Rendererへ追加したMA Shape ChangerがAdded Component Overrideとして保持されていません。");
+            }
+
+            if (component.Inverted
+                || !Mathf.Approximately(component.Threshold, ShapeChangerThreshold))
+            {
+                throw new OutfitGenerationException("生成したMA Shape Changerの固定設定が一致しません。");
+            }
+
+            if (component.Shapes == null || component.Shapes.Count != generated.Shapes.Length)
+            {
+                throw new OutfitGenerationException("生成したMA Shape ChangerのShape数が一致しません。");
+            }
+
+            for (var index = 0; index < generated.Shapes.Length; index++)
+            {
+                var expected = generated.Shapes[index];
+                var actual = component.Shapes[index];
+                var resolvedObject = actual?.Object?.Get(component);
+                if (actual == null
+                    || resolvedObject != expected.Renderer.gameObject
+                    || (resolvedObject != avatar
+                        && !resolvedObject.transform.IsChildOf(avatar.transform)))
+                {
+                    throw new OutfitGenerationException(
+                        "MA Shape ChangerのAvatarObjectReferenceを対象アバター内に解決できませんでした。");
+                }
+
+                if (actual.ChangeType != ShapeChangeType.Set
+                    || !string.Equals(
+                        actual.ShapeName,
+                        expected.Setting.ShapeName,
+                        StringComparison.Ordinal)
+                    || !Mathf.Approximately(actual.Value, expected.Setting.Value)
+                    || expected.Renderer.sharedMesh == null
+                    || expected.Renderer.sharedMesh.GetBlendShapeIndex(actual.ShapeName) < 0)
+                {
+                    throw new OutfitGenerationException(
+                        "生成したMA Shape ChangerのSet設定を検証できませんでした。");
+                }
+            }
+        }
+
         private static bool IsIdentityCurve(AnimationCurve curve)
         {
             if (curve == null || curve.length != 2) return false;
@@ -605,13 +832,16 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
         private sealed class PartToggleComponentBinding
         {
             internal PartToggleComponentBinding(
+                PartTogglePlan plan,
                 ModularAvatarObjectToggle component,
                 ResolvedPartTarget[] targets)
             {
+                Plan = plan;
                 Component = component;
                 Targets = targets;
             }
 
+            internal PartTogglePlan Plan { get; }
             internal ModularAvatarObjectToggle Component { get; }
             internal ResolvedPartTarget[] Targets { get; }
         }
@@ -658,17 +888,82 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
         {
             private readonly Renderer _renderer;
             private readonly bool _enabled;
+            private readonly Material[] _sharedMaterials;
+            private readonly bool _isSkinned;
+            private readonly Mesh _sharedMesh;
+            private readonly float[] _blendshapeWeights;
 
             internal RendererState(Renderer renderer)
             {
                 _renderer = renderer;
                 _enabled = renderer != null && renderer.enabled;
+                _sharedMaterials = renderer != null
+                    ? renderer.sharedMaterials.ToArray()
+                    : Array.Empty<Material>();
+                var skinnedRenderer = renderer as SkinnedMeshRenderer;
+                _isSkinned = skinnedRenderer != null;
+                _sharedMesh = skinnedRenderer != null ? skinnedRenderer.sharedMesh : null;
+                _blendshapeWeights = skinnedRenderer != null && _sharedMesh != null
+                    ? Enumerable.Range(0, _sharedMesh.blendShapeCount)
+                        .Select(skinnedRenderer.GetBlendShapeWeight)
+                        .ToArray()
+                    : Array.Empty<float>();
             }
 
             internal bool IsUnchanged()
             {
-                return _renderer != null && _renderer.enabled == _enabled;
+                if (_renderer == null
+                    || _renderer.enabled != _enabled
+                    || !_renderer.sharedMaterials.SequenceEqual(_sharedMaterials))
+                {
+                    return false;
+                }
+
+                if (!_isSkinned) return !(_renderer is SkinnedMeshRenderer);
+                var skinnedRenderer = _renderer as SkinnedMeshRenderer;
+                if (skinnedRenderer == null || skinnedRenderer.sharedMesh != _sharedMesh)
+                {
+                    return false;
+                }
+
+                var blendshapeWeights = _blendshapeWeights;
+                return Enumerable.Range(0, blendshapeWeights.Length)
+                    .All(index => skinnedRenderer.GetBlendShapeWeight(index) == blendshapeWeights[index]);
             }
+        }
+
+        private sealed class ResolvedShapeChange
+        {
+            internal ResolvedShapeChange(
+                ShapeChangerSettingPlan setting,
+                SkinnedMeshRenderer renderer)
+            {
+                Setting = setting;
+                Renderer = renderer;
+            }
+
+            internal ShapeChangerSettingPlan Setting { get; }
+            internal SkinnedMeshRenderer Renderer { get; }
+        }
+
+        private sealed class ShapeChangerComponentBinding
+        {
+            internal ShapeChangerComponentBinding(
+                ModularAvatarShapeChanger component,
+                GameObject owner,
+                ResolvedShapeChange[] shapes,
+                bool requiresAddedComponentOverride)
+            {
+                Component = component;
+                Owner = owner;
+                Shapes = shapes;
+                RequiresAddedComponentOverride = requiresAddedComponentOverride;
+            }
+
+            internal ModularAvatarShapeChanger Component { get; }
+            internal GameObject Owner { get; }
+            internal ResolvedShapeChange[] Shapes { get; }
+            internal bool RequiresAddedComponentOverride { get; }
         }
 
         private sealed class ResolvedBlendshapeBinding

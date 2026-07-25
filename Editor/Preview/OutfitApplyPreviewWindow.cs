@@ -22,9 +22,11 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
         private OutfitPreviewRenderMirror _mirror;
         private OutfitVisibilityPreviewFilter _sceneVisibilityFilter;
         private OutfitPartVisibilityPreviewFilter _partFilter;
+        private OutfitShapeChangerPreviewFilter _shapeChangerFilter;
         private PreviewSession _previewSession;
         private IDisposable _sceneVisibilityFilterRegistration;
         private IDisposable _partFilterRegistration;
+        private IDisposable _shapeChangerFilterRegistration;
         private TargetAvatarVisibility _targetAvatarVisibility;
         private readonly Dictionary<string, PartToggleTargetPlan> _highlightTargets =
             new Dictionary<string, PartToggleTargetPlan>(StringComparer.Ordinal);
@@ -44,6 +46,8 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             new SequencePoint { DebugString = "Setup Outfit Component Scene Visibility Preview" };
         private static readonly SequencePoint PartPreviewSequencePoint =
             new SequencePoint { DebugString = "Setup Outfit Component Part Preview" };
+        private static readonly SequencePoint ShapeChangerPreviewSequencePoint =
+            new SequencePoint { DebugString = "Setup Outfit Component Shape Changer Preview" };
 
         internal static OutfitApplyPreviewWindow ActiveWindowForTests => _activeWindow;
         internal int RebuildCountForTests => _rebuildCount;
@@ -52,6 +56,8 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             _sceneVisibilityFilter;
         internal OutfitVisibilityPreviewFilter FilterForTests => _sceneVisibilityFilter;
         internal OutfitPartVisibilityPreviewFilter PartFilterForTests => _partFilter;
+        internal OutfitShapeChangerPreviewFilter ShapeChangerFilterForTests =>
+            _shapeChangerFilter;
         internal OutfitPreviewHighlightCache HighlightCacheForTests => _highlightCache;
         internal IReadOnlyList<Renderer> HighlightedVisibleRenderersForTests =>
             GetHighlightedVisibleRenderers();
@@ -65,8 +71,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
 
         internal static void OpenOrUpdate(
             OutfitSetupWindow owner,
-            OutfitPreviewRequest request,
-            bool forceOutfitOn = false)
+            OutfitPreviewRequest request)
         {
             if (owner == null) throw new ArgumentNullException(nameof(owner));
             if (request == null) throw new ArgumentNullException(nameof(request));
@@ -79,11 +84,18 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                 _activeWindow.Show();
             }
 
-            if (_activeWindow._owner != null && _activeWindow._owner != owner)
+            var sameOwner = ReferenceEquals(_activeWindow._owner, owner);
+            if (!sameOwner
+                && (_activeWindow._request != null
+                    || !ReferenceEquals(_activeWindow._owner, null)))
+            {
                 _activeWindow.ClearHighlightedTargets();
+                _activeWindow.DisposePreviewResources();
+                _activeWindow._request = null;
+            }
 
             _activeWindow._owner = owner;
-            _activeWindow.ApplyRequest(request, true, forceOutfitOn);
+            _activeWindow.ApplyRequest(request);
             _activeWindow.Focus();
         }
 
@@ -92,7 +104,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             OutfitPreviewRequest request)
         {
             if (_activeWindow == null || _activeWindow._owner != owner) return;
-            _activeWindow.ApplyRequest(request, false, false);
+            _activeWindow.ApplyRequest(request);
         }
 
         internal static void UpdateHighlightedTargetsIfOpen(
@@ -169,9 +181,13 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             DrawHighlightedTargets();
 
             Handles.BeginGUI();
+            var hasDetailedControls = _request != null
+                                      && (_request.Parts.Length > 0
+                                          || _request.ShapeChanges.Length > 0
+                                          || _request.ShapeChangeWarnings.Length > 0);
             var overlayHeight = Mathf.Min(
                 Mathf.Max(position.height - 24f, 150f),
-                _request != null && _request.Parts.Length > 0 ? 440f : 190f);
+                hasDetailedControls ? 500f : 190f);
             GUILayout.BeginArea(new Rect(12f, 12f, 380f, overlayHeight), EditorStyles.helpBox);
             GUILayout.Label("衣装の表示適用プレビュー", EditorStyles.boldLabel);
             if (!string.IsNullOrEmpty(_error))
@@ -189,6 +205,12 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
 
                 DrawPartControls();
 
+                foreach (var warning in _request?.ShapeChangeWarnings
+                                        ?? ImmutableArray<string>.Empty)
+                {
+                    EditorGUILayout.HelpBox(warning, MessageType.Warning);
+                }
+
                 foreach (var warning in _highlightCache.Warnings)
                     EditorGUILayout.HelpBox(warning, MessageType.Warning);
 
@@ -199,9 +221,18 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                 }
             }
 
-            EditorGUILayout.HelpBox(
-                "Scene表示・個別パーツの視覚状態だけを確認します。MA装着処理、BlendShape Sync、最終NDMFビルド結果は反映しません。",
-                MessageType.Info);
+            if (_request != null && _request.ShapeChanges.Length > 0)
+            {
+                EditorGUILayout.HelpBox(
+                    "新規Shape ChangerのSetをプレビューします。MA装着処理、既存／外部Shape Changer、Delete、BlendShape Syncへの伝播、Animator、最終NDMF競合は反映しません。",
+                    MessageType.Info);
+            }
+            else
+            {
+                EditorGUILayout.HelpBox(
+                    "Scene表示・個別パーツの視覚状態だけを確認します。MA装着処理、BlendShape Sync、最終NDMFビルド結果は反映しません。",
+                    MessageType.Info);
+            }
             GUILayout.EndArea();
             Handles.EndGUI();
         }
@@ -254,16 +285,14 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                 EditorGUILayout.HelpBox(warning, MessageType.Warning);
             }
         }
-        private void ApplyRequest(
-            OutfitPreviewRequest request,
-            bool explicitOpen,
-            bool forceOutfitOn)
+        private void ApplyRequest(OutfitPreviewRequest request)
         {
             if (_request != null
                 && _mirror != null
                 && _previewSession != null
                 && _sceneVisibilityFilter != null
                 && _partFilter != null
+                && _shapeChangerFilter != null
                 && _request.IsMirrorStructureEquivalentTo(request))
             {
                 try
@@ -281,13 +310,17 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                         !_sceneVisibilityFilter.HasEquivalentRendererSet(
                             request.MasterSceneTargets,
                             request.Parts);
+                    var shapeRendererSetChanged =
+                        !_shapeChangerFilter.HasEquivalentRendererSet(
+                            request.SourcePrefab,
+                            request.DependencyHash,
+                            _mirror.SourceToMirror,
+                            request.ShapeChanges);
 
-                    ReconcilePartStates(previous, request, explicitOpen);
+                    ReconcilePartStates(previous, request);
                     _request = request;
 
-                    if (explicitOpen)
-                        _previewOn = forceOutfitOn || request.InitialOn;
-                    else if (previous.InitialOn != request.InitialOn)
+                    if (previous.InitialOn != request.InitialOn)
                         _previewOn = request.InitialOn;
 
                     if (prefabEnableBoundaryChanged)
@@ -322,6 +355,22 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                             _partStates);
                     }
 
+                    if (shapeRendererSetChanged)
+                    {
+                        RebuildShapeChangerFilter();
+                    }
+                    else
+                    {
+                        _shapeChangerFilter.UpdateRules(
+                            request.SourcePrefab,
+                            request.DependencyHash,
+                            _mirror.SourceToMirror,
+                            request.Parts,
+                            request.ShapeChanges,
+                            _previewOn,
+                            _partStates);
+                    }
+
                     _error = null;
                 }
                 catch (Exception exception)
@@ -336,15 +385,15 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                 return;
             }
 
-            Rebuild(request, forceOutfitOn && explicitOpen);
+            Rebuild(request);
         }
-        private void Rebuild(OutfitPreviewRequest request, bool forceOutfitOn = false)
+        private void Rebuild(OutfitPreviewRequest request)
         {
             if (_isRebuilding) return;
             _isRebuilding = true;
             try
             {
-                RebuildCore(request, forceOutfitOn);
+                RebuildCore(request);
             }
             finally
             {
@@ -352,11 +401,11 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             }
         }
 
-        private void RebuildCore(OutfitPreviewRequest request, bool forceOutfitOn)
+        private void RebuildCore(OutfitPreviewRequest request)
         {
             DisposePreviewResources();
             _request = request;
-            _previewOn = forceOutfitOn || request.InitialOn;
+            _previewOn = request.InitialOn;
             ResetPartStates(request, false);
             _error = null;
 
@@ -386,6 +435,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                 _previewSession.HiddenRenderers = _targetAvatarVisibility.GetHiddenRenderers;
                 RebuildSceneVisibilityFilter();
                 RebuildPartFilter();
+                RebuildShapeChangerFilter();
                 ResolveHighlightedTargets();
                 _previewSession.OverrideCamera(camera);
                 _rebuildCount++;
@@ -406,6 +456,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             _previewOn = previewOn;
             _sceneVisibilityFilter?.SetPreviewState(previewOn, _partStates);
             _partFilter?.SetPreviewState(previewOn, _partStates);
+            _shapeChangerFilter?.SetPreviewState(previewOn, _partStates);
             Repaint();
         }
 
@@ -414,6 +465,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             _partStates[key] = previewOn;
             _sceneVisibilityFilter?.SetPreviewState(_previewOn, _partStates);
             _partFilter?.SetPreviewState(_previewOn, _partStates);
+            _shapeChangerFilter?.SetPreviewState(_previewOn, _partStates);
             Repaint();
         }
 
@@ -530,20 +582,14 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
 
             _partFilter?.SetPreviewState(_previewOn, _partStates);
             _sceneVisibilityFilter?.SetPreviewState(_previewOn, _partStates);
+            _shapeChangerFilter?.SetPreviewState(_previewOn, _partStates);
             if (repaint) Repaint();
         }
 
         private void ReconcilePartStates(
             OutfitPreviewRequest previous,
-            OutfitPreviewRequest next,
-            bool explicitOpen)
+            OutfitPreviewRequest next)
         {
-            if (explicitOpen)
-            {
-                ResetPartStates(next, false);
-                return;
-            }
-
             var previousParts = previous.Parts.ToDictionary(part => part.Key, StringComparer.Ordinal);
             var reconciled = new Dictionary<string, bool>(StringComparer.Ordinal);
             foreach (var part in next.Parts)
@@ -601,6 +647,26 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             _partFilterRegistration = _previewSession.AddMutator(
                 PartPreviewSequencePoint,
                 _partFilter);
+        }
+
+        private void RebuildShapeChangerFilter()
+        {
+            _shapeChangerFilterRegistration?.Dispose();
+            _shapeChangerFilterRegistration = null;
+            _shapeChangerFilter = null;
+            if (_previewSession == null || _request == null || _mirror == null) return;
+
+            _shapeChangerFilter = new OutfitShapeChangerPreviewFilter(
+                _request.SourcePrefab,
+                _request.DependencyHash,
+                _mirror.SourceToMirror,
+                _request.Parts,
+                _request.ShapeChanges,
+                _previewOn,
+                _partStates);
+            _shapeChangerFilterRegistration = _previewSession.AddMutator(
+                ShapeChangerPreviewSequencePoint,
+                _shapeChangerFilter);
         }
 
         private static bool HaveEquivalentPartRules(
@@ -689,6 +755,10 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
 
         private void DisposePreviewResources()
         {
+            _shapeChangerFilterRegistration?.Dispose();
+            _shapeChangerFilterRegistration = null;
+            _shapeChangerFilter = null;
+
             _partFilterRegistration?.Dispose();
             _partFilterRegistration = null;
             _partFilter = null;
