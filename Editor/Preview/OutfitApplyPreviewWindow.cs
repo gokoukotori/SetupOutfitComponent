@@ -99,6 +99,9 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             _activeWindow.Focus();
         }
 
+        internal static bool IsOpenForOwner(OutfitSetupWindow owner) =>
+            _activeWindow != null && _activeWindow._owner == owner;
+
         internal static void UpdateIfOpen(
             OutfitSetupWindow owner,
             OutfitPreviewRequest request)
@@ -184,6 +187,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             var hasDetailedControls = _request != null
                                       && (_request.Parts.Length > 0
                                           || _request.ShapeChanges.Length > 0
+                                          || _request.ExistingAvatarShapeChangerSetCount > 0
                                           || _request.ShapeChangeWarnings.Length > 0);
             var overlayHeight = Mathf.Min(
                 Mathf.Max(position.height - 24f, 150f),
@@ -221,10 +225,16 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                 }
             }
 
-            if (_request != null && _request.ShapeChanges.Length > 0)
+            if (_request != null
+                && (_request.ShapeChanges.Length > 0
+                    || _request.ExistingAvatarShapeChangerSetCount > 0))
             {
+                var existingSummary = _request.ExistingAvatarShapeChangerSetCount > 0
+                    ? $"既存アバターShape Changer Set {_request.ExistingAvatarShapeChangerSetCount}件を反映中。"
+                    : string.Empty;
                 EditorGUILayout.HelpBox(
-                    "新規Shape ChangerのSetをプレビューします。MA装着処理、既存／外部Shape Changer、Delete、BlendShape Syncへの伝播、Animator、最終NDMF競合は反映しません。",
+                    existingSummary
+                    + "新規Setと既存SetをHierarchy順で累積プレビューします。既存MA Menu Itemは初期状態のみです。MA装着処理、Deleteの一時追従、BlendShape Syncへの伝播、Animator、Reaction Debugger、最終NDMF競合は反映しません。",
                     MessageType.Info);
             }
             else
@@ -315,7 +325,8 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                             request.SourcePrefab,
                             request.DependencyHash,
                             _mirror.SourceToMirror,
-                            request.ShapeChanges);
+                            request.ShapeChanges,
+                            request.ExistingAvatarShapeChanges);
 
                     ReconcilePartStates(previous, request);
                     _request = request;
@@ -363,10 +374,14 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                     {
                         _shapeChangerFilter.UpdateRules(
                             request.SourcePrefab,
+                            request.AvatarRoot,
+                            request.Placement,
                             request.DependencyHash,
                             _mirror.SourceToMirror,
+                            request.MasterSceneTargets,
                             request.Parts,
                             request.ShapeChanges,
+                            request.ExistingAvatarShapeChanges,
                             _previewOn,
                             _partStates);
                     }
@@ -658,10 +673,14 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
 
             _shapeChangerFilter = new OutfitShapeChangerPreviewFilter(
                 _request.SourcePrefab,
+                _request.AvatarRoot,
+                _request.Placement,
                 _request.DependencyHash,
                 _mirror.SourceToMirror,
+                _request.MasterSceneTargets,
                 _request.Parts,
                 _request.ShapeChanges,
+                _request.ExistingAvatarShapeChanges,
                 _previewOn,
                 _partStates);
             _shapeChangerFilterRegistration = _previewSession.AddMutator(

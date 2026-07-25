@@ -323,7 +323,10 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             PlacementState[] placementStates,
             ImmutableArray<OutfitPartPreviewSnapshot> parts,
             ImmutableArray<OutfitShapeChangePreviewSnapshot> shapeChanges,
-            ImmutableArray<string> shapeChangeWarnings)
+            ImmutableArray<ExistingAvatarShapeChangePreviewSnapshot> existingAvatarShapeChanges,
+            ImmutableArray<string> shapeChangeWarnings,
+            int existingAvatarShapeChangerDeleteCount,
+            int existingAvatarShapeChangerSkippedCount)
         {
             SourcePrefab = sourcePrefab;
             AvatarRoot = avatarRoot;
@@ -340,6 +343,11 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             ShapeChanges = shapeChanges.IsDefault
                 ? ImmutableArray<OutfitShapeChangePreviewSnapshot>.Empty
                 : shapeChanges;
+            ExistingAvatarShapeChanges = existingAvatarShapeChanges.IsDefault
+                ? ImmutableArray<ExistingAvatarShapeChangePreviewSnapshot>.Empty
+                : existingAvatarShapeChanges;
+            ExistingAvatarShapeChangerDeleteCount = existingAvatarShapeChangerDeleteCount;
+            ExistingAvatarShapeChangerSkippedCount = existingAvatarShapeChangerSkippedCount;
             ShapeChangeWarnings = shapeChangeWarnings.IsDefault
                 ? ImmutableArray<string>.Empty
                 : shapeChangeWarnings;
@@ -353,6 +361,10 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
         internal bool InitialOn { get; }
         internal ImmutableArray<OutfitPartPreviewSnapshot> Parts { get; }
         internal ImmutableArray<OutfitShapeChangePreviewSnapshot> ShapeChanges { get; }
+        internal ImmutableArray<ExistingAvatarShapeChangePreviewSnapshot> ExistingAvatarShapeChanges { get; }
+        internal int ExistingAvatarShapeChangerSetCount => ExistingAvatarShapeChanges.Length;
+        internal int ExistingAvatarShapeChangerDeleteCount { get; }
+        internal int ExistingAvatarShapeChangerSkippedCount { get; }
         internal ImmutableArray<string> ShapeChangeWarnings { get; }
         private PlacementState[] PlacementStates { get; }
 
@@ -662,6 +674,11 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                 return false;
             }
 
+            var existingShapeChanges =
+                ExistingAvatarShapeChangerPreviewAnalyzer.Analyze(avatarRoot);
+            shapeChangeWarnings = shapeChangeWarnings.AddRange(
+                existingShapeChanges.Warnings);
+
             request = new OutfitPreviewRequest(
                 sourcePrefab,
                 avatarRoot,
@@ -672,7 +689,10 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                 CapturePlacementStates(avatarRoot.transform, placement),
                 parts,
                 shapeChanges,
-                shapeChangeWarnings);
+                existingShapeChanges.Sets,
+                shapeChangeWarnings,
+                existingShapeChanges.DeleteCount,
+                existingShapeChanges.SkippedCount);
             return true;
         }
 
@@ -702,6 +722,17 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             return other != null && ShapeChanges.SequenceEqual(other.ShapeChanges);
         }
 
+        internal bool HasEquivalentExistingAvatarShapeChangesTo(OutfitPreviewRequest other)
+        {
+            return other != null
+                   && ExistingAvatarShapeChanges.SequenceEqual(
+                       other.ExistingAvatarShapeChanges)
+                   && ExistingAvatarShapeChangerDeleteCount
+                   == other.ExistingAvatarShapeChangerDeleteCount
+                   && ExistingAvatarShapeChangerSkippedCount
+                   == other.ExistingAvatarShapeChangerSkippedCount;
+        }
+
         internal bool HasEquivalentShapeChangeWarningsTo(OutfitPreviewRequest other)
         {
             return other != null
@@ -714,6 +745,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                    && HasEquivalentMasterSceneTargetsTo(other)
                    && HasEquivalentPartsTo(other)
                    && HasEquivalentShapeChangesTo(other)
+                   && HasEquivalentExistingAvatarShapeChangesTo(other)
                    && HasEquivalentShapeChangeWarningsTo(other);
         }
 

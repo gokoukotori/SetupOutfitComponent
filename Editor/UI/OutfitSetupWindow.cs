@@ -17,6 +17,11 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             "5. BlendShape Sync", "6. Shape Changer", "7. 確認",
         };
 
+        private const int StepHeaderColumnCount = 4;
+        private static readonly IReadOnlyList<int[]> StepHeaderRows =
+            BuildStepHeaderRows(StepNames.Length);
+
+
         private static readonly string[] SetupModeLabels =
         {
             "自動（既存を優先）", "MA標準セットアップを実行", "装着処理を行わない",
@@ -124,11 +129,14 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             titleContent = new GUIContent("衣装セットアップ");
             EditorSceneManager.sceneSaved -= OnSceneSaved;
             EditorSceneManager.sceneSaved += OnSceneSaved;
+            ObjectChangeEvents.changesPublished -= OnObjectChangesPublished;
+            ObjectChangeEvents.changesPublished += OnObjectChangesPublished;
         }
 
         private void OnDisable()
         {
             EditorSceneManager.sceneSaved -= OnSceneSaved;
+            ObjectChangeEvents.changesPublished -= OnObjectChangesPublished;
             OutfitApplyPreviewWindow.CloseForOwner(this);
         }
 
@@ -170,6 +178,59 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             Repaint();
         }
 
+        private void OnObjectChangesPublished(ref ObjectChangeEventStream stream)
+        {
+            if (_plan == null
+                || _selectedAvatar == null
+                || !OutfitApplyPreviewWindow.IsOpenForOwner(this))
+            {
+                return;
+            }
+
+            for (var index = 0; index < stream.length; index++)
+            {
+                var eventType = stream.GetEventType(index);
+                int changedInstanceId;
+                if (eventType == ObjectChangeKind.ChangeGameObjectOrComponentProperties)
+                {
+                    stream.GetChangeGameObjectOrComponentPropertiesEvent(
+                        index,
+                        out var propertyChange);
+                    changedInstanceId = propertyChange.instanceId;
+                }
+                else if (eventType == ObjectChangeKind.ChangeGameObjectStructure)
+                {
+                    stream.GetChangeGameObjectStructureEvent(
+                        index,
+                        out var structureChange);
+                    changedInstanceId = structureChange.instanceId;
+                }
+                else
+                {
+                    continue;
+                }
+
+                var changedObject = EditorUtility.InstanceIDToObject(changedInstanceId);
+                var changedGameObject = changedObject switch
+                {
+                    GameObject gameObject => gameObject,
+                    Component component => component.gameObject,
+                    _ => null,
+                };
+                if (changedGameObject == null
+                    || (changedGameObject != _selectedAvatar.gameObject
+                        && !changedGameObject.transform.IsChildOf(
+                            _selectedAvatar.transform)))
+                {
+                    continue;
+                }
+
+                UpdateApplyPreviewIfOpen();
+                Repaint();
+                return;
+            }
+        }
+
         private void OnGUI()
         {
             if (_sourcePrefab == null || _analysis == null || _plan == null)
@@ -204,16 +265,45 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
 
         private void DrawStepHeader()
         {
-            using (new EditorGUILayout.HorizontalScope())
+            foreach (var row in StepHeaderRows)
             {
-                for (var index = 0; index < StepNames.Length; index++)
+                using (new EditorGUILayout.HorizontalScope())
                 {
-                    using (new EditorGUI.DisabledScope(index > _step))
+                    foreach (var index in row)
                     {
-                        if (GUILayout.Toggle(_step == index, StepNames[index], EditorStyles.miniButton)) _step = index;
+                        using (new EditorGUI.DisabledScope(index > _step))
+                        {
+                            var selected = GUILayout.Toggle(
+                                _step == index,
+                                StepNames[index],
+                                EditorStyles.miniButton,
+                                GUILayout.ExpandWidth(true));
+                            if (!selected || index == _step) continue;
+                            _step = index;
+                            _scrollPosition = Vector2.zero;
+                        }
                     }
                 }
             }
+        }
+
+        internal static IReadOnlyList<int[]> BuildStepHeaderRows(int stepCount)
+        {
+            if (stepCount < 0)
+                throw new ArgumentOutOfRangeException(nameof(stepCount));
+
+            var rows = new List<int[]>((stepCount + StepHeaderColumnCount - 1)
+                                       / StepHeaderColumnCount);
+            for (var start = 0; start < stepCount; start += StepHeaderColumnCount)
+            {
+                var length = Math.Min(StepHeaderColumnCount, stepCount - start);
+                var row = new int[length];
+                for (var offset = 0; offset < length; offset++)
+                    row[offset] = start + offset;
+                rows.Add(row);
+            }
+
+            return rows;
         }
 
         private void DrawSourceStep()

@@ -2,6 +2,16 @@
 
 このパッケージの主な変更を記録します。
 
+## [0.2.6] - 2026-07-25
+
+- 選択アバターに既に追加されているMA Shape Changerの`Set`を、専用NDMF SceneViewの累積プレビューへ常時反映するようにしました。
+- 既存Shape Changerの所有GameObjectと祖先の`activeSelf`、`Inverted`、最寄りのMA Menu Itemの初期状態、Hierarchy上の優先順をプレビューへ反映しました。
+- ステップ3のScene表示設定とステップ4の個別項目による一時的な表示切り替えへ、既存Shape Changerの有効状態が追従するようにしました。
+- 既存の`Delete`はMA公式NDMFプレビューの現在状態に委ね、専用プレビューの一時状態には追従しないことを明記しました。
+- 外部Animator、既存メニューの任意状態、Reaction Debugger、BlendShape Sync伝播、最終NDMF競合は引き続き専用プレビューの対象外です。
+- 元Scene、Prefab、生成されるMA構成、公開API、Runtime assembly、依存条件を変更しない非破壊動作を維持しました。
+- 衣装セットアップウィンドウ上部の7ステップを、最小幅でもラベルが見切れない4＋3の二段ナビゲーションへ変更しました。
+
 ## [0.2.5] - 2026-07-24
 
 - 新しいステップ6を追加し、衣装全体または個別メニュー項目のON状態に連動するMA Shape Changerの`Set`設定を作成できるようにしました。

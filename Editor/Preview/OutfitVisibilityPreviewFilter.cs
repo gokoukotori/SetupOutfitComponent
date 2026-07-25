@@ -81,7 +81,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                 return false;
             }
 
-            return EvaluateControlledVisibility(_visibility.Value, rule);
+            return EvaluateControlledVisibility(_visibility.Value, renderer, rule);
         }
 
         internal bool ControlsRenderer(Renderer renderer)
@@ -108,29 +108,17 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
 
         private static bool EvaluateControlledVisibility(
             VisibilityState state,
+            Renderer renderer,
             RendererRule rule)
         {
             if (!state.PreviewOn) return rule.OriginalVisible;
-            if (!rule.RendererEnabled || !rule.StaticHierarchyActive) return false;
-
-            foreach (var transformRule in rule.TransformRules)
-            {
-                var active = transformRule.MasterActiveWhenOn
-                             ?? transformRule.OriginalActiveSelf;
-                if (PartToggleMenuOrderResolver.TryResolveLastEnabled(
-                        transformRule.PartControls,
-                        control => control.ItemId,
-                        control => control.ActiveWhenOn,
-                        state.PartStates,
-                        out var partActive))
-                {
-                    active = partActive;
-                }
-
-                if (!active) return false;
-            }
-
-            return true;
+            return rule.RendererEnabled
+                   && renderer != null
+                   && state.ActiveResolver.IsHierarchyActive(
+                       renderer.gameObject,
+                       null,
+                       true,
+                       state.PartStates);
         }
 
         private static Renderer[] CollectControlledRenderers(
@@ -167,6 +155,9 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             bool previewOn,
             IReadOnlyDictionary<string, bool> partStates)
         {
+            var activeResolver = new OutfitSceneActiveStateResolver(
+                masterSceneTargets,
+                parts);
             var targets = new Dictionary<GameObject, MutableTransformRule>();
             var targetPaths = new Dictionary<GameObject, string>();
             foreach (var master in masterSceneTargets
@@ -249,6 +240,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                 .ToImmutableArray();
             return new VisibilityState(
                 rules.ToImmutableDictionary(),
+                activeResolver,
                 CopyPartStates(partStates),
                 previewOn,
                 warnings);
@@ -354,17 +346,21 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
         {
             internal VisibilityState(
                 ImmutableDictionary<Renderer, RendererRule> rules,
+                OutfitSceneActiveStateResolver activeResolver,
                 ImmutableDictionary<string, bool> partStates,
                 bool previewOn,
                 ImmutableArray<string> warnings)
             {
                 Rules = rules;
+                ActiveResolver = activeResolver
+                                 ?? throw new ArgumentNullException(nameof(activeResolver));
                 PartStates = partStates;
                 PreviewOn = previewOn;
                 Warnings = warnings;
             }
 
             internal ImmutableDictionary<Renderer, RendererRule> Rules { get; }
+            internal OutfitSceneActiveStateResolver ActiveResolver { get; }
             internal ImmutableDictionary<string, bool> PartStates { get; }
             internal bool PreviewOn { get; }
             internal ImmutableArray<string> Warnings { get; }
@@ -375,6 +371,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             {
                 return new VisibilityState(
                     Rules,
+                    ActiveResolver,
                     CopyPartStates(partStates),
                     previewOn,
                     Warnings);
@@ -397,7 +394,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                 if (proxy == null) return;
                 var state = _visibility.Value;
                 if (!state.Rules.TryGetValue(original, out var rule)) return;
-                proxy.enabled = EvaluateControlledVisibility(state, rule);
+                proxy.enabled = EvaluateControlledVisibility(state, original, rule);
             }
 
             public void Dispose()

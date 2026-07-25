@@ -21,14 +21,45 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             IEnumerable<OutfitShapeChangePreviewSnapshot> changes,
             bool previewOn,
             IReadOnlyDictionary<string, bool> partStates)
+            : this(
+                sourcePrefab,
+                null,
+                null,
+                dependencyHash,
+                sourceToMirror,
+                Enumerable.Empty<OutfitMasterSceneTargetPreviewSnapshot>(),
+                parts,
+                changes,
+                Enumerable.Empty<ExistingAvatarShapeChangePreviewSnapshot>(),
+                previewOn,
+                partStates)
+        {
+        }
+
+        internal OutfitShapeChangerPreviewFilter(
+            GameObject sourcePrefab,
+            GameObject avatarRoot,
+            Transform placement,
+            string dependencyHash,
+            IReadOnlyDictionary<Transform, Transform> sourceToMirror,
+            IEnumerable<OutfitMasterSceneTargetPreviewSnapshot> masterSceneTargets,
+            IEnumerable<OutfitPartPreviewSnapshot> parts,
+            IEnumerable<OutfitShapeChangePreviewSnapshot> changes,
+            IEnumerable<ExistingAvatarShapeChangePreviewSnapshot> existingChanges,
+            bool previewOn,
+            IReadOnlyDictionary<string, bool> partStates)
         {
             _state = new PublishedValue<ShapeState>(
                 CreateState(
                     sourcePrefab,
+                    avatarRoot,
+                    placement,
                     dependencyHash,
                     sourceToMirror,
+                    masterSceneTargets,
                     parts,
                     changes,
+                    existingChanges,
                     previewOn,
                     partStates),
                 "SetupOutfitComponent/ShapeChanger");
@@ -41,6 +72,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
         internal int TargetGroupEvaluationCount { get; private set; }
         internal int NodeCreationCount { get; private set; }
         internal int RuleBuildCountForTests { get; private set; } = 1;
+        internal int ExistingSetCountForTests => _state.Value.ExistingSetCount;
 
         internal bool HasEquivalentRendererSet(
             GameObject sourcePrefab,
@@ -48,12 +80,28 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             IReadOnlyDictionary<Transform, Transform> sourceToMirror,
             IEnumerable<OutfitShapeChangePreviewSnapshot> changes)
         {
+            return HasEquivalentRendererSet(
+                sourcePrefab,
+                dependencyHash,
+                sourceToMirror,
+                changes,
+                Enumerable.Empty<ExistingAvatarShapeChangePreviewSnapshot>());
+        }
+
+        internal bool HasEquivalentRendererSet(
+            GameObject sourcePrefab,
+            string dependencyHash,
+            IReadOnlyDictionary<Transform, Transform> sourceToMirror,
+            IEnumerable<OutfitShapeChangePreviewSnapshot> changes,
+            IEnumerable<ExistingAvatarShapeChangePreviewSnapshot> existingChanges)
+        {
             return _renderers.SequenceEqual(
                 CollectRenderers(
                     sourcePrefab,
                     dependencyHash,
                     sourceToMirror,
-                    changes));
+                    changes,
+                    existingChanges));
         }
 
         internal void UpdateRules(
@@ -65,12 +113,43 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             bool previewOn,
             IReadOnlyDictionary<string, bool> partStates)
         {
-            var next = CreateState(
+            UpdateRules(
                 sourcePrefab,
+                null,
+                null,
                 dependencyHash,
                 sourceToMirror,
+                Enumerable.Empty<OutfitMasterSceneTargetPreviewSnapshot>(),
                 parts,
                 changes,
+                Enumerable.Empty<ExistingAvatarShapeChangePreviewSnapshot>(),
+                previewOn,
+                partStates);
+        }
+
+        internal void UpdateRules(
+            GameObject sourcePrefab,
+            GameObject avatarRoot,
+            Transform placement,
+            string dependencyHash,
+            IReadOnlyDictionary<Transform, Transform> sourceToMirror,
+            IEnumerable<OutfitMasterSceneTargetPreviewSnapshot> masterSceneTargets,
+            IEnumerable<OutfitPartPreviewSnapshot> parts,
+            IEnumerable<OutfitShapeChangePreviewSnapshot> changes,
+            IEnumerable<ExistingAvatarShapeChangePreviewSnapshot> existingChanges,
+            bool previewOn,
+            IReadOnlyDictionary<string, bool> partStates)
+        {
+            var next = CreateState(
+                sourcePrefab,
+                avatarRoot,
+                placement,
+                dependencyHash,
+                sourceToMirror,
+                masterSceneTargets,
+                parts,
+                changes,
+                existingChanges,
                 previewOn,
                 partStates);
             var nextRenderers = next.Rules.Keys
@@ -112,20 +191,57 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
 
         private static ShapeState CreateState(
             GameObject sourcePrefab,
+            GameObject avatarRoot,
+            Transform placement,
             string dependencyHash,
             IReadOnlyDictionary<Transform, Transform> sourceToMirror,
+            IEnumerable<OutfitMasterSceneTargetPreviewSnapshot> masterSceneTargets,
             IEnumerable<OutfitPartPreviewSnapshot> parts,
             IEnumerable<OutfitShapeChangePreviewSnapshot> changes,
+            IEnumerable<ExistingAvatarShapeChangePreviewSnapshot> existingChanges,
             bool previewOn,
             IReadOnlyDictionary<string, bool> partStates)
         {
-            var activeResolver = new OutfitPrefabActiveStateResolver(
+            var partArray = (parts ?? Enumerable.Empty<OutfitPartPreviewSnapshot>())
+                .ToArray();
+            var prefabActiveResolver = new OutfitPrefabActiveStateResolver(
                 sourcePrefab,
                 dependencyHash,
                 sourceToMirror,
-                parts);
+                partArray);
+            var sceneActiveResolver = new OutfitSceneActiveStateResolver(
+                masterSceneTargets,
+                partArray);
             var mutableRules =
                 new Dictionary<SkinnedMeshRenderer, Dictionary<string, List<ShapeControl>>>();
+            var sequence = 0;
+            var existingSetCount = 0;
+
+            foreach (var existing in existingChanges
+                         ?? Enumerable.Empty<ExistingAvatarShapeChangePreviewSnapshot>())
+            {
+                AddControl(
+                    existing.Renderer,
+                    existing.ShapeName,
+                    new ShapeControl(
+                        string.Empty,
+                        false,
+                        false,
+                        default,
+                        existing.Owner,
+                        true,
+                        existing.Inverted,
+                        existing.HasMenuCondition,
+                        existing.MenuInitiallyActive,
+                        existing.HierarchyOrder,
+                        sequence++,
+                        existing.Value));
+                existingSetCount++;
+            }
+
+            var partIndices = partArray
+                .Select((part, index) => (part.ItemId, index))
+                .ToDictionary(pair => pair.ItemId, pair => pair.index, StringComparer.Ordinal);
             foreach (var change in changes
                          ?? Enumerable.Empty<OutfitShapeChangePreviewSnapshot>())
             {
@@ -134,17 +250,68 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                     dependencyHash,
                     sourceToMirror,
                     change);
+                var order = CreatePlannedOrder(
+                    sourcePrefab,
+                    avatarRoot,
+                    placement,
+                    partIndices,
+                    change,
+                    sequence);
+                AddControl(
+                    renderer,
+                    change.ShapeName,
+                    new ShapeControl(
+                        change.OwnerItemId,
+                        change.IsMaster,
+                        change.HasOutfitOwner,
+                        change.OutfitOwnerKey,
+                        null,
+                        false,
+                        false,
+                        false,
+                        true,
+                        order,
+                        sequence++,
+                        change.Value));
+            }
+
+            var rules = mutableRules.ToImmutableDictionary(
+                pair => pair.Key,
+                pair => pair.Value
+                    .OrderBy(shape => shape.Key, StringComparer.Ordinal)
+                    .Select(shape => new ShapeRule(
+                        shape.Key,
+                        pair.Key.sharedMesh.GetBlendShapeIndex(shape.Key),
+                        shape.Value
+                            .OrderBy(control => control.HierarchyOrder)
+                            .ThenBy(control => control.Sequence)
+                            .ToImmutableArray()))
+                    .ToImmutableArray());
+            return new ShapeState(
+                rules,
+                prefabActiveResolver,
+                sceneActiveResolver,
+                avatarRoot != null ? avatarRoot.transform : null,
+                CopyPartStates(partStates),
+                previewOn,
+                existingSetCount);
+
+            void AddControl(
+                SkinnedMeshRenderer renderer,
+                string shapeName,
+                ShapeControl control)
+            {
                 if (renderer == null || renderer.sharedMesh == null)
                 {
                     throw new InvalidOperationException(
                         "Shape Changerプレビュー対象のRendererを解決できませんでした。");
                 }
 
-                var shapeIndex = renderer.sharedMesh.GetBlendShapeIndex(change.ShapeName);
+                var shapeIndex = renderer.sharedMesh.GetBlendShapeIndex(shapeName);
                 if (shapeIndex < 0)
                 {
                     throw new InvalidOperationException(
-                        $"Shape Changerプレビュー対象にBlendShape「{change.ShapeName}」がありません。");
+                        $"Shape Changerプレビュー対象にBlendShape「{shapeName}」がありません。");
                 }
 
                 if (!mutableRules.TryGetValue(renderer, out var shapeRules))
@@ -154,47 +321,85 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                     mutableRules.Add(renderer, shapeRules);
                 }
 
-                if (!shapeRules.TryGetValue(change.ShapeName, out var controls))
+                if (!shapeRules.TryGetValue(shapeName, out var controls))
                 {
                     controls = new List<ShapeControl>();
-                    shapeRules.Add(change.ShapeName, controls);
+                    shapeRules.Add(shapeName, controls);
                 }
 
-                controls.Add(new ShapeControl(
-                    change.OwnerItemId,
-                    change.IsMaster,
-                    change.HasOutfitOwner,
-                    change.OutfitOwnerKey,
-                    change.OwnerHierarchyOrder,
-                    change.Value));
+                controls.Add(control);
+            }
+        }
+
+        private static ShapeChangerHierarchyOrder CreatePlannedOrder(
+            GameObject sourcePrefab,
+            GameObject avatarRoot,
+            Transform placement,
+            IReadOnlyDictionary<string, int> partIndices,
+            OutfitShapeChangePreviewSnapshot change,
+            int sequence)
+        {
+            if (avatarRoot == null
+                || placement == null
+                || (placement != avatarRoot.transform
+                    && !placement.IsChildOf(avatarRoot.transform)))
+            {
+                return new ShapeChangerHierarchyOrder(
+                    new[] { sequence },
+                    0,
+                    sequence);
             }
 
-            var rules = mutableRules.ToImmutableDictionary(
-                pair => pair.Key,
-                pair => pair.Value
-                    .Select(shape => new ShapeRule(
-                        pair.Key.sharedMesh.GetBlendShapeIndex(shape.Key),
-                        shape.Value.ToImmutableArray()))
-                    .ToImmutableArray());
-            return new ShapeState(
-                rules,
-                activeResolver,
-                CopyPartStates(partStates),
-                previewOn);
+            if (change.IsMaster)
+            {
+                return ShapeChangerHierarchyOrder.ForGeneratedMaster(
+                    avatarRoot.transform,
+                    placement,
+                    sequence);
+            }
+
+            if (change.HasOutfitOwner)
+            {
+                return ShapeChangerHierarchyOrder.ForGeneratedOutfitOwner(
+                    avatarRoot.transform,
+                    placement,
+                    change.OutfitOwnerKey,
+                    sequence);
+            }
+
+            var partIndex = partIndices.TryGetValue(
+                change.OwnerItemId,
+                out var resolvedPartIndex)
+                ? resolvedPartIndex
+                : partIndices.Count;
+            return ShapeChangerHierarchyOrder.ForGeneratedPart(
+                avatarRoot.transform,
+                placement,
+                sourcePrefab.transform.childCount,
+                partIndex,
+                sequence);
         }
 
         private static SkinnedMeshRenderer[] CollectRenderers(
             GameObject sourcePrefab,
             string dependencyHash,
             IReadOnlyDictionary<Transform, Transform> sourceToMirror,
-            IEnumerable<OutfitShapeChangePreviewSnapshot> changes)
+            IEnumerable<OutfitShapeChangePreviewSnapshot> changes,
+            IEnumerable<ExistingAvatarShapeChangePreviewSnapshot> existingChanges)
         {
-            return (changes ?? Enumerable.Empty<OutfitShapeChangePreviewSnapshot>())
+            var plannedRenderers =
+                (changes ?? Enumerable.Empty<OutfitShapeChangePreviewSnapshot>())
                 .Select(change => ResolveRenderer(
                     sourcePrefab,
                     dependencyHash,
                     sourceToMirror,
-                    change))
+                    change));
+            var existingRenderers =
+                (existingChanges
+                 ?? Enumerable.Empty<ExistingAvatarShapeChangePreviewSnapshot>())
+                .Select(change => change.Renderer);
+            return plannedRenderers
+                .Concat(existingRenderers)
                 .Where(renderer => renderer != null)
                 .Distinct()
                 .OrderBy(renderer => renderer.GetInstanceID())
@@ -241,14 +446,26 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                 bool isMaster,
                 bool hasOutfitOwner,
                 PrefabTargetKey outfitOwnerKey,
-                int ownerHierarchyOrder,
+                GameObject existingOwner,
+                bool isExisting,
+                bool inverted,
+                bool hasMenuCondition,
+                bool menuInitiallyActive,
+                ShapeChangerHierarchyOrder hierarchyOrder,
+                int sequence,
                 float value)
             {
                 OwnerItemId = ownerItemId ?? string.Empty;
                 IsMaster = isMaster;
                 HasOutfitOwner = hasOutfitOwner;
                 OutfitOwnerKey = outfitOwnerKey;
-                OwnerHierarchyOrder = ownerHierarchyOrder;
+                ExistingOwner = existingOwner;
+                IsExisting = isExisting;
+                Inverted = inverted;
+                HasMenuCondition = hasMenuCondition;
+                MenuInitiallyActive = menuInitiallyActive;
+                HierarchyOrder = hierarchyOrder;
+                Sequence = sequence;
                 Value = value;
             }
 
@@ -256,22 +473,31 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             internal bool IsMaster { get; }
             internal bool HasOutfitOwner { get; }
             internal PrefabTargetKey OutfitOwnerKey { get; }
-            internal int OwnerHierarchyOrder { get; }
+            internal GameObject ExistingOwner { get; }
+            internal bool IsExisting { get; }
+            internal bool Inverted { get; }
+            internal bool HasMenuCondition { get; }
+            internal bool MenuInitiallyActive { get; }
+            internal ShapeChangerHierarchyOrder HierarchyOrder { get; }
+            internal int Sequence { get; }
             internal float Value { get; }
         }
 
         private readonly struct ShapeRule
         {
             internal ShapeRule(
+                string shapeName,
                 int shapeIndex,
                 ImmutableArray<ShapeControl> controls)
             {
+                ShapeName = shapeName ?? string.Empty;
                 ShapeIndex = shapeIndex;
                 Controls = controls.IsDefault
                     ? ImmutableArray<ShapeControl>.Empty
                     : controls;
             }
 
+            internal string ShapeName { get; }
             internal int ShapeIndex { get; }
             internal ImmutableArray<ShapeControl> Controls { get; }
         }
@@ -280,20 +506,29 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
         {
             internal ShapeState(
                 ImmutableDictionary<SkinnedMeshRenderer, ImmutableArray<ShapeRule>> rules,
-                OutfitPrefabActiveStateResolver activeResolver,
+                OutfitPrefabActiveStateResolver prefabActiveResolver,
+                OutfitSceneActiveStateResolver sceneActiveResolver,
+                Transform avatarRoot,
                 ImmutableDictionary<string, bool> partStates,
-                bool previewOn)
+                bool previewOn,
+                int existingSetCount)
             {
                 Rules = rules;
-                ActiveResolver = activeResolver;
+                PrefabActiveResolver = prefabActiveResolver;
+                SceneActiveResolver = sceneActiveResolver;
+                AvatarRoot = avatarRoot;
                 PartStates = partStates;
                 PreviewOn = previewOn;
+                ExistingSetCount = existingSetCount;
             }
 
             internal ImmutableDictionary<SkinnedMeshRenderer, ImmutableArray<ShapeRule>> Rules { get; }
-            internal OutfitPrefabActiveStateResolver ActiveResolver { get; }
+            internal OutfitPrefabActiveStateResolver PrefabActiveResolver { get; }
+            internal OutfitSceneActiveStateResolver SceneActiveResolver { get; }
+            internal Transform AvatarRoot { get; }
             internal ImmutableDictionary<string, bool> PartStates { get; }
             internal bool PreviewOn { get; }
+            internal int ExistingSetCount { get; }
 
             internal ShapeState WithPreviewState(
                 bool previewOn,
@@ -301,9 +536,12 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             {
                 return new ShapeState(
                     Rules,
-                    ActiveResolver,
+                    PrefabActiveResolver,
+                    SceneActiveResolver,
+                    AvatarRoot,
                     CopyPartStates(partStates),
-                    previewOn);
+                    previewOn,
+                    ExistingSetCount);
             }
         }
 
@@ -321,54 +559,67 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             public void OnFrame(Renderer original, Renderer proxy)
             {
                 if (original is not SkinnedMeshRenderer originalSmr
-                    || proxy is not SkinnedMeshRenderer proxySmr)
+                    || proxy is not SkinnedMeshRenderer proxySmr
+                    || proxySmr.sharedMesh == null)
                 {
                     return;
                 }
 
                 var state = _state.Value;
-                if (!state.PreviewOn
-                    || !state.Rules.TryGetValue(originalSmr, out var rules))
-                {
-                    return;
-                }
+                if (!state.Rules.TryGetValue(originalSmr, out var rules)) return;
 
                 foreach (var rule in rules)
                 {
+                    var proxyShapeIndex = proxySmr.sharedMesh.GetBlendShapeIndex(
+                        rule.ShapeName);
+                    if (rule.ShapeIndex < 0 || proxyShapeIndex < 0)
+                    {
+                        continue;
+                    }
+
+                    var value = originalSmr.GetBlendShapeWeight(rule.ShapeIndex);
                     for (var index = rule.Controls.Length - 1; index >= 0; index--)
                     {
                         var control = rule.Controls[index];
-                        var controlActive = control.IsMaster;
-                        if (control.HasOutfitOwner)
-                        {
-                            controlActive = state.ActiveResolver.IsActive(
-                                control.OutfitOwnerKey,
-                                state.PreviewOn,
-                                state.PartStates);
-                        }
-                        else if (!control.IsMaster)
-                        {
-                            controlActive = state.PartStates.TryGetValue(
-                                                control.OwnerItemId,
-                                                out var partOn)
-                                            && partOn;
-                        }
-
-                        if (!controlActive)
-                        {
-                            continue;
-                        }
-
-                        if (rule.ShapeIndex >= 0
-                            && proxySmr.sharedMesh != null
-                            && rule.ShapeIndex < proxySmr.sharedMesh.blendShapeCount)
-                        {
-                            proxySmr.SetBlendShapeWeight(rule.ShapeIndex, control.Value);
-                        }
-
+                        if (!IsControlActive(state, control)) continue;
+                        value = control.Value;
                         break;
                     }
+
+                    proxySmr.SetBlendShapeWeight(proxyShapeIndex, value);
                 }
+            }
+
+            private static bool IsControlActive(
+                ShapeState state,
+                ShapeControl control)
+            {
+                if (control.IsExisting)
+                {
+                    var active = state.SceneActiveResolver.IsHierarchyActive(
+                                     control.ExistingOwner,
+                                     state.AvatarRoot,
+                                     state.PreviewOn,
+                                     state.PartStates)
+                                 && (!control.HasMenuCondition
+                                     || control.MenuInitiallyActive);
+                    return active ^ control.Inverted;
+                }
+
+                if (!state.PreviewOn) return false;
+                if (control.IsMaster) return true;
+                if (control.HasOutfitOwner)
+                {
+                    return state.PrefabActiveResolver.IsActive(
+                        control.OutfitOwnerKey,
+                        true,
+                        state.PartStates);
+                }
+
+                return state.PartStates.TryGetValue(
+                           control.OwnerItemId,
+                           out var partOn)
+                       && partOn;
             }
 
             public void Dispose()
