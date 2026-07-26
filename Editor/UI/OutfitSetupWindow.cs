@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using nadena.dev.modular_avatar.core;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
@@ -1075,12 +1076,12 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
 
         private void DrawShapeChangerStep()
         {
-            EditorGUILayout.LabelField("MA Shape Changer Set", EditorStyles.boldLabel);
+            EditorGUILayout.LabelField("MA Shape Changer Set / Delete", EditorStyles.boldLabel);
             EditorGUILayout.HelpBox(
-                "衣装全体ON、衣装Renderer GameObjectの表示状態、または個別メニュー項目のON状態に連動して、アバター側／衣装側のBlendShapeを0～100の値へ設定します。DeleteとThreshold編集には対応しません。",
+                "衣装全体ON、衣装Renderer GameObjectの表示状態、または個別メニュー項目のON状態に連動して、BlendShapeをSetするか、Shape差分のあるポリゴンをDeleteします。DeleteのThresholdは0.01固定です。",
                 MessageType.Info);
             EditorGUILayout.HelpBox(
-                "「条件を反転」はBlendShape値ではなく、所有GameObjectのactive階層とメニュー条件をすべて評価した後の適用条件を反転します。衣装全体OFFや祖先非アクティブ時にもSetが有効になる場合があります。",
+                "「条件を反転」は値ではなく、所有GameObjectのactive階層とメニュー条件をすべて評価した後の適用条件を反転します。衣装全体OFFや祖先非アクティブ時にもSet／Deleteが有効になる場合があります。",
                 MessageType.None);
 
             using (new EditorGUI.DisabledScope(!CanAttemptApplyPreview()))
@@ -1089,7 +1090,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                     OpenApplyPreview();
             }
             EditorGUILayout.HelpBox(
-                "専用プレビューは新規に設定したSetだけを反映します。衣装Renderer表示連動はGameObjectのactiveSelfと祖先状態を使用します。既存／外部Shape Changer、BlendShape Sync伝播、Animator、Delete、最終NDMF競合は再現しません。",
+                "専用プレビューは新規に設定したSetとDeleteを反映します。DeleteはMA公式プレビュー相当のポリゴン除外を表示しますが、最終NaNimation、BlendShape Sync伝播、外部MA競合は再現しません。既存DeleteはMA公式NDMFプレビューの現在状態へ委ねます。",
                 MessageType.None);
             EditorGUILayout.HelpBox(
                 "Shape操作対象RendererまたはBlendShape名が未指定の行は、専用プレビューから除外します。完成済みの設定と衣装表示は引き続きプレビューできますが、未指定行はステップ7への移動と生成ではエラーになります。",
@@ -1475,12 +1476,30 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                 }
 
                 DrawShapeChangerShapePopup(setting, options);
+
                 EditorGUI.BeginChangeCheck();
-                var nextValue = EditorGUILayout.Slider("Set値", setting.Value, 0f, 100f);
+                var nextChangeType = (ShapeChangeType)EditorGUILayout.EnumPopup(
+                    "操作", setting.ChangeType);
                 if (EditorGUI.EndChangeCheck())
                 {
-                    setting.Value = nextValue;
+                    setting.ChangeType = nextChangeType;
+                    if (nextChangeType == ShapeChangeType.Delete) setting.Value = 100f;
                     ShapeChangerPlanChanged();
+                }
+
+                if (setting.ChangeType == ShapeChangeType.Set)
+                {
+                    EditorGUI.BeginChangeCheck();
+                    var nextValue = EditorGUILayout.Slider("Set値", setting.Value, 0f, 100f);
+                    if (EditorGUI.EndChangeCheck())
+                    {
+                        setting.Value = nextValue;
+                        ShapeChangerPlanChanged();
+                    }
+                }
+                else
+                {
+                    EditorGUILayout.LabelField("Delete設定", "Value=100 / Threshold=0.01（固定）");
                 }
                 EditorGUI.BeginChangeCheck();
                 var nextInverted = EditorGUILayout.Toggle("条件を反転", setting.Inverted);
@@ -1690,14 +1709,14 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             }
 
             EditorGUILayout.Space(8f);
-            EditorGUILayout.LabelField("Shape Changer Set", EditorStyles.boldLabel);
-            EditorGUILayout.LabelField("生成設定", "Set / ShapeごとにInverted / Threshold=0.01");
+            EditorGUILayout.LabelField("Shape Changer Set / Delete", EditorStyles.boldLabel);
+            EditorGUILayout.LabelField("生成設定", "SetまたはDelete / ShapeごとにInverted / Threshold=0.01");
             EditorGUILayout.LabelField(
                 "競合解決",
                 "全体 → 衣装Renderer付与先（Prefab Hierarchy順） → 個別項目（メニュー順）");
             EditorGUILayout.LabelField(
                 "有効所有者の優先",
-                "Hierarchyで後ろの有効な所有者を優先。非アクティブな所有者はSet寄与を解放");
+                "Hierarchyで後ろの有効な所有者を優先。後段Setは先行Deleteを解除");
             if (_analysis.ExistingShapeChangers.Count == 0
                 && _plan.MasterShapeChanges.Count == 0
                 && _plan.OutfitRendererShapeChangers.All(owner =>
@@ -1782,7 +1801,9 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                     "  [" + GetShapeChangerTargetSourceLabel(setting) + "] "
                     + GetShapeChangerRendererDisplayName(setting)
                     + " / " + EmptyFallback(setting.ShapeName, "<Shape未指定>"),
-                    "Set " + setting.Value.ToString("0.###")
+                    (setting.ChangeType == ShapeChangeType.Delete
+                        ? "Delete / Threshold 0.01"
+                        : "Set " + setting.Value.ToString("0.###"))
                     + (setting.Inverted ? " / 条件反転あり" : " / 条件反転なし"));
             }
         }
@@ -1889,13 +1910,17 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
         {
             if (setting == null
                 || string.IsNullOrWhiteSpace(setting.ShapeName)
-                || float.IsNaN(setting.Value)
-                || float.IsInfinity(setting.Value)
-                || setting.Value < 0f
-                || setting.Value > 100f)
+                || !Enum.IsDefined(typeof(ShapeChangeType), setting.ChangeType))
             {
                 return false;
             }
+
+            if (setting.ChangeType == ShapeChangeType.Set
+                && (float.IsNaN(setting.Value)
+                    || float.IsInfinity(setting.Value)
+                    || setting.Value < 0f
+                    || setting.Value > 100f))
+                return false;
 
             return setting.Source == PartTargetSource.OutfitPrefab
                    || setting.SceneRendererReference != null;

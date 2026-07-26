@@ -460,10 +460,13 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                         "Shape Changer対象Renderer、Mesh、またはBlendShapeを解決できません。");
                 }
 
-                if (float.IsNaN(setting.Value)
-                    || float.IsInfinity(setting.Value)
-                    || setting.Value < 0f
-                    || setting.Value > 100f)
+                if (!Enum.IsDefined(typeof(ShapeChangeType), setting.ChangeType))
+                    throw new OutfitGenerationException("Shape Changerの操作種別が不正です。");
+                if (setting.ChangeType == ShapeChangeType.Set
+                    && (float.IsNaN(setting.Value)
+                        || float.IsInfinity(setting.Value)
+                        || setting.Value < 0f
+                        || setting.Value > 100f))
                 {
                     throw new OutfitGenerationException("Shape ChangerのSet値が0～100の有限値ではありません。");
                 }
@@ -483,8 +486,10 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                 {
                     Object = reference,
                     ShapeName = resolved.Setting.ShapeName,
-                    ChangeType = ShapeChangeType.Set,
-                    Value = resolved.Setting.Value,
+                    ChangeType = resolved.Setting.ChangeType,
+                    Value = resolved.Setting.ChangeType == ShapeChangeType.Delete
+                        ? 100f
+                        : resolved.Setting.Value,
                 };
             }).ToList();
             EditorUtility.SetDirty(component);
@@ -793,17 +798,20 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                         "MA Shape ChangerのAvatarObjectReferenceを対象アバター内に解決できませんでした。");
                 }
 
-                if (actual.ChangeType != ShapeChangeType.Set
+                var expectedValue = expected.Setting.ChangeType == ShapeChangeType.Delete
+                    ? 100f
+                    : expected.Setting.Value;
+                if (actual.ChangeType != expected.Setting.ChangeType
                     || !string.Equals(
                         actual.ShapeName,
                         expected.Setting.ShapeName,
                         StringComparison.Ordinal)
-                    || !Mathf.Approximately(actual.Value, expected.Setting.Value)
+                    || !Mathf.Approximately(actual.Value, expectedValue)
                     || expected.Renderer.sharedMesh == null
                     || expected.Renderer.sharedMesh.GetBlendShapeIndex(actual.ShapeName) < 0)
                 {
                     throw new OutfitGenerationException(
-                        "生成したMA Shape ChangerのSet設定を検証できませんでした。");
+                        "生成したMA Shape ChangerのShape設定を検証できませんでした。");
                 }
             }
         }

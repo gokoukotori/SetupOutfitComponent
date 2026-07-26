@@ -213,7 +213,8 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             string stableRendererId,
             string shapeName,
             float value,
-            bool inverted = false)
+            bool inverted = false,
+            nadena.dev.modular_avatar.core.ShapeChangeType changeType = nadena.dev.modular_avatar.core.ShapeChangeType.Set)
             : this(
                 ownerItemId,
                 isMaster,
@@ -226,7 +227,8 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                 stableRendererId,
                 shapeName,
                 value,
-                inverted)
+                inverted,
+                changeType)
         {
         }
 
@@ -242,7 +244,8 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             string stableRendererId,
             string shapeName,
             float value,
-            bool inverted = false)
+            bool inverted = false,
+            nadena.dev.modular_avatar.core.ShapeChangeType changeType = nadena.dev.modular_avatar.core.ShapeChangeType.Set)
         {
             OwnerItemId = ownerItemId ?? string.Empty;
             IsMaster = isMaster;
@@ -256,6 +259,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             ShapeName = shapeName ?? string.Empty;
             Value = value;
             Inverted = inverted;
+            ChangeType = changeType;
         }
 
         internal string OwnerItemId { get; }
@@ -270,6 +274,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
         internal string ShapeName { get; }
         internal float Value { get; }
         internal bool Inverted { get; }
+        internal nadena.dev.modular_avatar.core.ShapeChangeType ChangeType { get; }
 
         public bool Equals(OutfitShapeChangePreviewSnapshot other)
         {
@@ -287,7 +292,8 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                        StringComparison.Ordinal)
                    && string.Equals(ShapeName, other.ShapeName, StringComparison.Ordinal)
                    && Value.Equals(other.Value)
-                   && Inverted == other.Inverted;
+                   && Inverted == other.Inverted
+                   && ChangeType == other.ChangeType;
         }
 
         public override bool Equals(object obj)
@@ -313,7 +319,8 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                 hashCode = (hashCode * 397)
                            ^ StringComparer.Ordinal.GetHashCode(ShapeName);
                 hashCode = (hashCode * 397) ^ Value.GetHashCode();
-                return (hashCode * 397) ^ Inverted.GetHashCode();
+                hashCode = (hashCode * 397) ^ Inverted.GetHashCode();
+                return (hashCode * 397) ^ (int)ChangeType;
             }
         }
     }
@@ -686,6 +693,12 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             shapeChangeWarnings = shapeChangeWarnings.AddRange(
                 existingShapeChanges.Warnings);
 
+            if (existingShapeChanges.DeleteCount > 0 && shapeChanges.Length > 0)
+            {
+                shapeChangeWarnings = shapeChangeWarnings.Add(
+                    "既存アバターShape ChangerのDeleteと生成予定のSet／Deleteが同じ対象へ作用する場合、専用プレビューでは最終競合結果を保証しません。既存Deleteの現在状態はMA公式NDMFプレビューへ委ねます。");
+            }
+
             request = new OutfitPreviewRequest(
                 sourcePrefab,
                 avatarRoot,
@@ -908,10 +921,17 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                     return false;
                 }
 
-                if (float.IsNaN(change.Value)
-                    || float.IsInfinity(change.Value)
-                    || change.Value < 0f
-                    || change.Value > 100f)
+                if (!Enum.IsDefined(typeof(nadena.dev.modular_avatar.core.ShapeChangeType), change.ChangeType))
+                {
+                    error = $"Shape Changer「{ownerLabel}」の操作種別が不正です。";
+                    return false;
+                }
+
+                if (change.ChangeType == nadena.dev.modular_avatar.core.ShapeChangeType.Set
+                    && (float.IsNaN(change.Value)
+                        || float.IsInfinity(change.Value)
+                        || change.Value < 0f
+                        || change.Value > 100f))
                 {
                     error = $"Shape Changer「{ownerLabel}」の値は0～100で指定してください。";
                     return false;
@@ -1009,8 +1029,11 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                     change.Source == PartTargetSource.SceneObject ? renderer : null,
                     change.StableRendererId,
                     change.ShapeName,
-                    change.Value,
-                    change.Inverted));
+                    change.ChangeType == nadena.dev.modular_avatar.core.ShapeChangeType.Delete
+                        ? 100f
+                        : change.Value,
+                    change.Inverted,
+                    change.ChangeType));
             }
 
             if (skippedCount > 0)

@@ -678,7 +678,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                 if (rendererOwner.ShapeChanges.Count == 0)
                 {
                     AddError(messages, "SHAPE_CHANGER_RENDERER_OWNER_EMPTY",
-                        "衣装Renderer ownerのShape ChangerにSet設定がありません。");
+                        "衣装Renderer ownerのShape ChangerにShape設定がありません。");
                 }
 
                 if (plan.Analysis.ExistingShapeChangers.Any(existing =>
@@ -696,9 +696,9 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                     && HasUncoveredInactiveOwnerHierarchy(plan, ownerObject, plan.SourcePrefab))
                 {
                     AddWarning(messages, "SHAPE_CHANGER_RENDERER_OWNER_INACTIVE",
-                        "Shape Changer ownerまたは祖先は入力Prefabで非アクティブですが、反転なしのSetに対して"
+                        "Shape Changer ownerまたは祖先は入力Prefabで非アクティブですが、反転なしの設定に対して"
                         + "ステップ4にON時表示するowner／祖先ターゲットがありません。"
-                        + "外部MAまたはAnimatorで有効化されない限り反転なしのSetは適用されません。");
+                        + "外部MAまたはAnimatorで有効化されない限り反転なしの設定は適用されません。");
                 }
 
                 if (ownerObject != null
@@ -805,6 +805,13 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                     continue;
                 }
 
+                if (!Enum.IsDefined(typeof(ShapeChangeType), setting.ChangeType))
+                {
+                    AddError(messages, "SHAPE_CHANGER_CHANGE_TYPE",
+                        $"{ownerDisplayName}のShape Changer操作種別が不正です。");
+                    continue;
+                }
+
                 GameObject targetObject = null;
                 SkinnedMeshRenderer renderer = null;
                 if (setting.Source == PartTargetSource.OutfitPrefab)
@@ -866,10 +873,11 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                         $"{ownerDisplayName}の対象MeshにBlendShape「{setting.ShapeName}」がありません。");
                 }
 
-                if (float.IsNaN(setting.Value)
-                    || float.IsInfinity(setting.Value)
-                    || setting.Value < 0f
-                    || setting.Value > 100f)
+                if (setting.ChangeType == ShapeChangeType.Set
+                    && (float.IsNaN(setting.Value)
+                        || float.IsInfinity(setting.Value)
+                        || setting.Value < 0f
+                        || setting.Value > 100f))
                 {
                     AddError(messages, "SHAPE_CHANGER_VALUE",
                         $"{ownerDisplayName}のSet値は0～100の有限値である必要があります。");
@@ -882,7 +890,8 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                         $"{ownerDisplayName}で同じRendererとBlendShapeを複数回指定できません。");
                 }
 
-                if (generatedSyncDestinations.Contains(shapeKey))
+                if (setting.ChangeType == ShapeChangeType.Set
+                    && generatedSyncDestinations.Contains(shapeKey))
                 {
                     AddError(messages, "SHAPE_CHANGER_BLENDSYNC_DOUBLE_PATH",
                         "生成予定のMA Blendshape Sync同期先ShapeをShape Changerから直接操作できません。同期元Shapeだけを操作してください。");

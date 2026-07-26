@@ -1,6 +1,6 @@
 # Setup Outfit Component
 
-`Setup Outfit Component`は、VRChatアバター用の衣装Prefabを解析し、Modular Avatarを使った装着・メニュー・トグル・BlendShape Sync・Shape Changer Set構成をScene上へ生成するEditor専用パッケージです。
+`Setup Outfit Component`は、VRChatアバター用の衣装Prefabを解析し、Modular Avatarを使った装着・メニュー・トグル・BlendShape Sync・Shape Changer Set／Delete構成をScene上へ生成するEditor専用パッケージです。
 
 設定中はPrefabやSceneを変更せず、最終確認で「シーンに生成」を実行したときだけSceneへ出力します。元Prefabの保存や変更、独自Runtime Componentの追加は行いません。
 
@@ -19,7 +19,7 @@
 Packages/com.gokoukotori.setup-outfit-component
 ```
 
-配布用VPMリポジトリやGit URLからの導入は、バージョン0.2.7では提供していません。
+配布用VPMリポジトリやGit URLからの導入は、バージョン0.2.8では提供していません。
 
 ## 使い方
 
@@ -57,7 +57,7 @@ Assets/Setup Outfit Component/衣装セットアップ...
 
 全体トグルは`ON = 衣装を表示`です。Scene対象は衣装ON時だけ指定した表示／非表示へ切り替わり、全体OFF時は元Sceneの`activeSelf`へ戻ります。
 
-適用プレビューはNDMFのカメラ別PreviewSessionを使用し、専用SceneViewだけへ適用されます。元Scene、Prefab、Transform、Selection、Undo、通常のSceneViewやNDMFプレビュー設定は変更しません。初回はステップ3の全体トグル`初期ON`設定で開始し、同じウィザードから開き直した場合は衣装全体と個別項目の一時ON/OFFを維持します。プレビュー対象は衣装全体、Scene表示対象、個別パーツの表示状態、ステップ6で新規設定したShape Changer Set、および選択アバターに既に追加されているMA Shape Changerの`Set`です。衣装Renderer表示連動と既存Shape Changerでは、所有GameObjectと祖先の表示状態も反映します。MA標準セットアップ、Merge Armature、BlendShape Sync伝播、外部Animator、既存メニューの任意状態、Reaction Debugger、最終NDMFビルド後のArmature統合結果は反映しません。
+適用プレビューはNDMFのカメラ別PreviewSessionを使用し、専用SceneViewだけへ適用されます。元Scene、Prefab、Transform、Selection、Undo、通常のSceneViewやNDMFプレビュー設定は変更しません。初回はステップ3の全体トグル`初期ON`設定で開始し、同じウィザードから開き直した場合は衣装全体と個別項目の一時ON/OFFを維持します。プレビュー対象は衣装全体、Scene表示対象、個別パーツの表示状態、ステップ6で新規設定したShape Changer Set／Delete、および選択アバターに既に追加されているMA Shape Changerの`Set`です。衣装Renderer表示連動と既存Shape Changerでは、所有GameObjectと祖先の表示状態も反映します。生成予定のDeleteはポリゴン除外の視覚結果だけを反映し、NaNimation、MA標準セットアップ、Merge Armature、BlendShape Sync伝播、外部Animator、既存メニューの任意状態、Reaction Debugger、最終NDMFビルド後のArmature統合結果は反映しません。
 
 `表示`はGameObjectの`activeSelf`を有効化するため、対象に含まれるPhysBone、Constraintなども実際の生成結果では有効になり得ます。視覚プレビューは`MeshRenderer`／`SkinnedMeshRenderer`だけを対象とし、スクリプトの`OnEnable`やコンポーネントの実動作は再現しません。`Renderer.enabled=false`のRendererや、非表示の祖先の下にあるRendererは表示設定でも描画されません。
 
@@ -101,27 +101,29 @@ Assets/Setup Outfit Component/衣装セットアップ...
 
 ### 6. Shape Changer
 
-- 衣装全体ONまたはステップ4の個別メニュー項目を制御元として、MA Shape Changerの`Set`設定を追加します。
-- `衣装Renderer表示連動`では、Rendererが直接付いている衣装Prefab内GameObjectを付与先として選択し、そのGameObjectと祖先がアクティブな間だけSetを適用できます。PrefabルートもRendererが直接付いている場合だけ候補になります。
+- 衣装全体ONまたはステップ4の個別メニュー項目を制御元として、MA Shape Changerの`Set`／`Delete`設定を追加します。
+- `衣装Renderer表示連動`では、Rendererが直接付いている衣装Prefab内GameObjectを付与先として選択し、そのGameObjectと祖先がアクティブな間だけ設定を適用できます。PrefabルートもRendererが直接付いている場合だけ候補になります。
 - 付与先候補はPrefab Hierarchy順で表示され、相対パス、元の`activeSelf`、Renderer種別、表示状態へ関係するステップ4項目を確認できます。付与先と、実際にBlendShapeを変更する`Shape対象`は別々に指定します。
 - 対象アバター内のScene `SkinnedMeshRenderer`、または衣装Prefab内の`SkinnedMeshRenderer`を指定できます。
 - Rendererを選ぶと、そのMeshに存在するBlendShape名をMesh上の順序で選択できます。衣装側のBlendShape名は設定前から表示されます。
-- Set値は`0～100`です。各Shape設定で`条件を反転`を選択でき、`ChangeType=Set`、`Threshold=0.01`で生成します。
+- 各Shape設定で`Set`／`Delete`と`条件を反転`を選択できます。Set値は`0～100`です。Deleteは`Value=100`、`Threshold=0.01`へ固定され、Thresholdの編集には対応しません。
+- Deleteは全BlendShapeフレームの頂点差分を調べ、差分距離が`0.01`を超える頂点を1つでも含むPrimitiveを`AnyVertex`規則で削除します。複数ShapeをDeleteする場合は、該当するPrimitiveの和集合を削除します。
 - 同じ制御元で通常と反転の設定が混在する場合は、同じGameObjectへ`Inverted=false`、`Inverted=true`の順で最大2個のMA Shape Changerを生成します。補助GameObjectは生成しません。
-- 条件反転はBlendShape値を変換せず、所有GameObjectのactive階層とメニュー条件をすべて評価した後の適用条件を反転します。衣装全体OFFや祖先非アクティブ時にも反転Setが有効になる場合があります。
+- SetとDeleteは同じMA Shape Changerへ混在できます。条件反転はBlendShape値やDelete判定を変換せず、所有GameObjectのactive階層とメニュー条件をすべて評価した後の適用条件を反転します。衣装全体OFFや祖先非アクティブ時にも反転設定が有効になる場合があります。
 - 同じ制御元内の同一Renderer＋Shapeは重複指定できません。異なる個別項目が同じShapeを操作する場合は、同時ON中でメニューの最も下にある項目を優先します。
-- 生成予定のBlendShape Syncの同期元Shapeを操作した場合は、Modular Avatarの最終処理で同期先へ伝播します。同じ同期先を直接操作する二重経路は生成できません。
+- 同じRenderer＋Shapeへ複数の設定が有効な場合はHierarchyで最後の設定が優先されます。後段のSetは先行するDeleteを解除し、後段のDeleteはそのShapeに該当するPrimitiveを削除します。
+- 生成予定のBlendShape Syncの同期元ShapeへSetした場合は、Modular Avatarの最終処理で同期先へ伝播します。同じ同期先を直接Setする二重経路は生成できません。DeleteはBlendShape Syncへ伝播しません。
 - 入力Prefabに既存のMA Shape Changerがある場合は変更せず保持し、コンポーネント位置、対象、Shape、Set／Delete、値、Thresholdを読み取り専用で表示します。新規設定との競合は警告として生成を許可し、最終結果はMAのHierarchy順に依存します。
 - 選択アバターに既に追加されているMA Shape Changerの`Set`は、専用プレビューへ読み取り専用で反映します。所有GameObjectと祖先の`activeSelf`、`Inverted`、最寄りのMA Menu Itemの初期状態を評価し、ステップ3・4の一時的な表示切り替えにも追従します。
 - 解決できない既存`Set`はプレビューから除外して警告を表示します。既存`Delete`は、通常のNDMF／MAプレビューが有効な場合にMA公式プレビューの現在状態だけを表示します。
-- `Shape Changerプレビューを開く`から同じ累積プレビューを開き、新規設定したSet値と全体／個別メニュー状態を確認できます。ステップ6から開いても衣装全体を強制的にONにはしません。
+- `Shape Changerプレビューを開く`から同じ累積プレビューを開き、新規設定したSet値、DeleteによるPrimitive除外、全体／個別メニュー状態を確認できます。ステップ6から開いても衣装全体を強制的にONにはしません。
 - Shape操作対象RendererまたはBlendShape名が未指定の行は専用プレビューから除外され、完成済みの設定と衣装表示だけを確認できます。未指定行は設定から削除・補完されず、ステップ7への移動と生成では引き続きエラーになります。
 
-複数のShape Changerが同じShapeへSetする場合は、衣装全体、衣装Renderer付与先のPrefab Hierarchy順、個別メニュー順の順に評価され、Hierarchyで後ろにある有効な所有者が優先されます。反転なしでは所有者GameObjectまたは祖先が非アクティブになるとSet寄与を解放し、反転ありでは同じ基準条件が偽の間にSetを適用します。`Renderer.enabled=false`だけではMA Shape Changerは無効になりません。
+複数のShape Changerが同じShapeを操作する場合は、衣装全体、衣装Renderer付与先のPrefab Hierarchy順、個別メニュー順の順に評価され、Hierarchyで後ろにある有効な設定が優先されます。反転なしでは所有者GameObjectまたは祖先が非アクティブになると設定の寄与を解放し、反転ありでは同じ基準条件が偽の間に設定を適用します。`Renderer.enabled=false`だけではMA Shape Changerは無効になりません。
 
-専用プレビューは新規に設定したShape Changer Setとシェイプ単位の条件反転、衣装Renderer所有者のactive階層、選択アバター上の既存Shape Changer Setを反映します。同じRenderer＋Shapeを複数の有効な設定が操作する場合は、生成予定設定を含むHierarchy走査上で最後のSetを表示します。有効なSetがない場合は元のBlendShape Weightへ戻ります。`Renderer.enabled=false`は描画を抑制しますが、Shape Changerの有効条件としては扱いません。
+専用プレビューは新規に設定したShape Changer Set／Deleteとシェイプ単位の条件反転、衣装Renderer所有者のactive階層、選択アバター上の既存Shape Changer Setを反映します。SetはProxyのBlendShape Weightへ、DeleteはProxy MeshのIndex Bufferから該当Primitiveを除外する視覚結果として反映します。DeleteのNaNimation生成、Animator、最終ビルド処理は再現しません。`Renderer.enabled=false`は描画を抑制しますが、Shape Changerの有効条件としては扱いません。
 
-既存メニューをプレビュー内で任意に操作する機能、外部Animator、Reaction Debugger、BlendShape Syncによる伝播、既存Shape Changerの`Delete`に対するステップ3・4の一時状態追従、最終NDMF競合は再現しません。NDMF／MAプレビューが有効な場合、既存`Delete`の現在状態はMA公式プレビューへ委ねます。
+既存メニューをプレビュー内で任意に操作する機能、外部Animator、Reaction Debugger、BlendShape Syncによる伝播、既存Shape Changerの`Delete`に対するステップ3・4の一時状態追従、最終NDMF競合は再現しません。NDMF／MAプレビューが有効な場合、既存`Delete`の現在状態はMA公式プレビューへ委ねます。既存Deleteと生成予定のSet／Deleteが重なる場合、専用プレビューだけでは最終競合結果を保証しません。
 
 ### 7. 確認
 
@@ -146,7 +148,7 @@ Assets/Setup Outfit Component/衣装セットアップ...
 
 BlendShape Syncを設定した場合は、対象となる衣装RendererのGameObjectへMA Blendshape Syncが追加されます。
 
-Shape Changerを設定した場合は、全体設定を既存の全体トグルGameObjectへ、個別設定を対応する個別Menu Item GameObjectへ追加します。衣装Renderer表示連動は生成したPrefabインスタンス内の選択GameObjectへAdded Component Overrideとして追加し、元Prefabは変更しません。Shape Changer専用の補助GameObjectは生成しません。
+Shape Changerを設定した場合は、全体設定を既存の全体トグルGameObjectへ、個別設定を対応する個別Menu Item GameObjectへ追加します。衣装Renderer表示連動は生成したPrefabインスタンス内の選択GameObjectへAdded Component Overrideとして追加し、元Prefabは変更しません。Set／Deleteは選択した`ChangeType`、Deleteは`Value=100`と固定`Threshold=0.01`で生成します。Shape Changer専用の補助GameObjectは生成しません。
 
 ## 非破壊動作とUndo
 
@@ -173,12 +175,12 @@ Shape Changerを設定した場合は、全体設定を既存の全体トグルG
 - 出力名の衝突
 - 明示許可していない同一Prefabの重複配置
 
-バージョン0.2.7では、次の機能は対象外です。
+バージョン0.2.8では、次の機能は対象外です。
 
 - 適用プレビューでのMA標準セットアップ、Merge Armature、BlendShape Sync伝播、外部Animator、既存メニューの任意状態、Reaction Debugger、最終NDMFビルド結果の再現
 - 既存MA Shape Changerの`Delete`に対する、ステップ3・4の一時状態追従
 - BlendShapeのRemap Curve編集
-- MA Shape Changerの`Delete`、Threshold編集
+- MA Shape ChangerのThreshold編集
 - MA Material Swapの自動生成
 - 元PrefabのComponent／GameObject削除
 - Prefabアセット保存、再生成マニフェスト、設定プロファイル

@@ -3,16 +3,34 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Threading.Tasks;
+using nadena.dev.modular_avatar.core;
 using nadena.dev.ndmf.preview;
+using UnityEngine.Rendering;
 using UnityEngine;
 
 namespace Gokoukotori.SetupOutfitComponent.Editor
 {
+    internal sealed class OutfitShapeDeletePreviewState
+    {
+        internal OutfitShapeDeletePreviewState(
+            ImmutableDictionary<SkinnedMeshRenderer, ImmutableArray<string>> activeShapes,
+            int revision)
+        {
+            ActiveShapes = activeShapes
+                           ?? ImmutableDictionary<SkinnedMeshRenderer, ImmutableArray<string>>.Empty;
+            Revision = revision;
+        }
+
+        internal ImmutableDictionary<SkinnedMeshRenderer, ImmutableArray<string>> ActiveShapes { get; }
+        internal int Revision { get; }
+    }
+
     internal sealed class OutfitShapeChangerPreviewFilter : IRenderFilter
     {
         private readonly SkinnedMeshRenderer[] _renderers;
         private readonly PublishedValue<ShapeState> _state;
 
+        private readonly PublishedValue<OutfitShapeDeletePreviewState> _deleteState;
         internal OutfitShapeChangerPreviewFilter(
             GameObject sourcePrefab,
             string dependencyHash,
@@ -49,23 +67,27 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             bool previewOn,
             IReadOnlyDictionary<string, bool> partStates)
         {
+            var initialState = CreateState(
+                sourcePrefab,
+                avatarRoot,
+                placement,
+                dependencyHash,
+                sourceToMirror,
+                masterSceneTargets,
+                parts,
+                changes,
+                existingChanges,
+                previewOn,
+                partStates);
             _state = new PublishedValue<ShapeState>(
-                CreateState(
-                    sourcePrefab,
-                    avatarRoot,
-                    placement,
-                    dependencyHash,
-                    sourceToMirror,
-                    masterSceneTargets,
-                    parts,
-                    changes,
-                    existingChanges,
-                    previewOn,
-                    partStates),
+                initialState,
                 "SetupOutfitComponent/ShapeChanger");
             _renderers = _state.Value.Rules.Keys
                 .OrderBy(renderer => renderer.GetInstanceID())
                 .ToArray();
+            _deleteState = new PublishedValue<OutfitShapeDeletePreviewState>(
+                new OutfitShapeDeletePreviewState(CollectActiveDeleteShapes(initialState), 0),
+                "SetupOutfitComponent/ShapeChangerDelete");
         }
 
         public bool CanEnableRenderers => false;
@@ -74,7 +96,11 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
         internal int RuleBuildCountForTests { get; private set; } = 1;
         internal int ExistingSetCountForTests => _state.Value.ExistingSetCount;
 
+        internal OutfitShapeDeletePreviewFilter CreateDeletePreviewFilter() =>
+            new OutfitShapeDeletePreviewFilter(_renderers, _deleteState);
+
         internal bool HasEquivalentRendererSet(
+
             GameObject sourcePrefab,
             string dependencyHash,
             IReadOnlyDictionary<Transform, Transform> sourceToMirror,
@@ -161,7 +187,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                     "Shape Changer対象のRenderer集合が変更されたためFilterの再登録が必要です。");
             }
 
-            _state.Value = next;
+            PublishState(next);
             RuleBuildCountForTests++;
         }
 
@@ -169,7 +195,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             bool previewOn,
             IReadOnlyDictionary<string, bool> partStates)
         {
-            _state.Value = _state.Value.WithPreviewState(previewOn, partStates);
+            PublishState(_state.Value.WithPreviewState(previewOn, partStates));
         }
 
         public ImmutableList<RenderGroup> GetTargetGroups(ComputeContext context)
@@ -235,7 +261,8 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                         existing.MenuInitiallyActive,
                         existing.HierarchyOrder,
                         sequence++,
-                        existing.Value));
+                        existing.Value,
+                        ShapeChangeType.Set));
                 existingSetCount++;
             }
 
@@ -272,7 +299,8 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                         true,
                         order,
                         sequence++,
-                        change.Value));
+                        change.Value,
+                        change.ChangeType));
             }
 
             var rules = mutableRules.ToImmutableDictionary(
@@ -428,6 +456,76 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
 
             return mirrorTransform.GetComponent<SkinnedMeshRenderer>();
         }
+        private void PublishState(ShapeState next)
+        {
+            _state.Value = next;
+            var activeShapes = CollectActiveDeleteShapes(next);
+            var current = _deleteState.Value;
+            if (HaveEquivalentDeleteShapes(current.ActiveShapes, activeShapes)) return;
+
+            _deleteState.Value = new OutfitShapeDeletePreviewState(
+                activeShapes,
+                current.Revision + 1);
+        }
+
+        private static ImmutableDictionary<SkinnedMeshRenderer, ImmutableArray<string>>
+            CollectActiveDeleteShapes(ShapeState state)
+        {
+            var result = ImmutableDictionary
+                .CreateBuilder<SkinnedMeshRenderer, ImmutableArray<string>>();
+            foreach (var rendererRules in state.Rules)
+            {
+                var shapes = ImmutableArray.CreateBuilder<string>();
+                foreach (var rule in rendererRules.Value)
+                {
+                    if (TryGetWinningControl(state, rule, out var winner)
+                        && winner.ChangeType == ShapeChangeType.Delete)
+                    {
+                        shapes.Add(rule.ShapeName);
+                    }
+                }
+
+                if (shapes.Count > 0)
+                    result.Add(rendererRules.Key, shapes.ToImmutable());
+            }
+
+            return result.ToImmutable();
+        }
+
+        private static bool TryGetWinningControl(
+            ShapeState state,
+            ShapeRule rule,
+            out ShapeControl winner)
+        {
+            for (var index = rule.Controls.Length - 1; index >= 0; index--)
+            {
+                var control = rule.Controls[index];
+                if (!Node.IsControlActive(state, control)) continue;
+                winner = control;
+                return true;
+            }
+
+            winner = default;
+            return false;
+        }
+
+        private static bool HaveEquivalentDeleteShapes(
+            IReadOnlyDictionary<SkinnedMeshRenderer, ImmutableArray<string>> left,
+            IReadOnlyDictionary<SkinnedMeshRenderer, ImmutableArray<string>> right)
+        {
+            if (left.Count != right.Count) return false;
+            foreach (var pair in left)
+            {
+                if (!right.TryGetValue(pair.Key, out var other)
+                    || !pair.Value.SequenceEqual(other))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
 
         private static ImmutableDictionary<string, bool> CopyPartStates(
             IReadOnlyDictionary<string, bool> partStates)
@@ -453,7 +551,8 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                 bool menuInitiallyActive,
                 ShapeChangerHierarchyOrder hierarchyOrder,
                 int sequence,
-                float value)
+                float value,
+                ShapeChangeType changeType)
             {
                 OwnerItemId = ownerItemId ?? string.Empty;
                 IsMaster = isMaster;
@@ -467,6 +566,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                 HierarchyOrder = hierarchyOrder;
                 Sequence = sequence;
                 Value = value;
+                ChangeType = changeType;
             }
 
             internal string OwnerItemId { get; }
@@ -481,6 +581,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             internal ShapeChangerHierarchyOrder HierarchyOrder { get; }
             internal int Sequence { get; }
             internal float Value { get; }
+            internal ShapeChangeType ChangeType { get; }
         }
 
         private readonly struct ShapeRule
@@ -581,7 +682,8 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                     for (var index = rule.Controls.Length - 1; index >= 0; index--)
                     {
                         var control = rule.Controls[index];
-                        if (!IsControlActive(state, control)) continue;
+                        if (control.ChangeType != ShapeChangeType.Set
+                            || !IsControlActive(state, control)) continue;
                         value = control.Value;
                         break;
                     }
@@ -590,7 +692,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                 }
             }
 
-            private static bool IsControlActive(
+            internal static bool IsControlActive(
                 ShapeState state,
                 ShapeControl control)
             {
@@ -633,6 +735,442 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
 
             public void Dispose()
             {
+            }
+        }
+    }
+
+    internal sealed class OutfitShapeDeletePreviewFilter : IRenderFilter
+    {
+        internal const float Threshold = 0.01f;
+
+        private readonly SkinnedMeshRenderer[] _renderers;
+        private readonly PublishedValue<OutfitShapeDeletePreviewState> _state;
+        private readonly Dictionary<SkinnedMeshRenderer, VisibilityCacheEntry> _visibilityCache =
+            new Dictionary<SkinnedMeshRenderer, VisibilityCacheEntry>();
+
+        internal OutfitShapeDeletePreviewFilter(
+            IEnumerable<SkinnedMeshRenderer> renderers,
+            PublishedValue<OutfitShapeDeletePreviewState> state)
+        {
+            _renderers = (renderers ?? Enumerable.Empty<SkinnedMeshRenderer>())
+                .Where(renderer => renderer != null)
+                .Distinct()
+                .OrderBy(renderer => renderer.GetInstanceID())
+                .ToArray();
+            _state = state ?? throw new ArgumentNullException(nameof(state));
+        }
+
+        public bool CanEnableRenderers => false;
+        internal int TargetGroupEvaluationCount { get; private set; }
+        internal int NodeCreationCount { get; private set; }
+        internal int MeshBuildCountForTests { get; private set; }
+        internal int MeshDestroyCountForTests { get; private set; }
+
+        public ImmutableList<RenderGroup> GetTargetGroups(ComputeContext context)
+        {
+            TargetGroupEvaluationCount++;
+            return _renderers
+                .Select(RenderGroup.For)
+                .ToImmutableList();
+        }
+
+        public Task<IRenderFilterNode> Instantiate(
+            RenderGroup group,
+            IEnumerable<(Renderer, Renderer)> proxyPairs,
+            ComputeContext context)
+        {
+            var pair = proxyPairs.First();
+            NodeCreationCount++;
+            return Task.FromResult<IRenderFilterNode>(new Node(
+                this,
+                _state,
+                pair.Item1 as SkinnedMeshRenderer));
+        }
+
+        internal bool HasVisiblePrimitives(Renderer renderer)
+        {
+            if (renderer is not SkinnedMeshRenderer smr || smr.sharedMesh == null) return true;
+            var state = _state.Value;
+            var shapes = state.ActiveShapes.TryGetValue(smr, out var activeShapes)
+                ? activeShapes
+                : ImmutableArray<string>.Empty;
+
+            if (_visibilityCache.TryGetValue(smr, out var cached)
+                && cached.Shapes.SequenceEqual(shapes))
+            {
+                return cached.HasVisiblePrimitives;
+            }
+
+            if (shapes.Length == 0) return true;
+            var hasVisiblePrimitives = HasRetainedPrimitives(
+                smr.sharedMesh,
+                shapes,
+                Threshold);
+            RecordVisibility(smr, smr.sharedMesh, shapes, hasVisiblePrimitives);
+            return hasVisiblePrimitives;
+        }
+
+        private void RecordVisibility(
+            SkinnedMeshRenderer renderer,
+            Mesh upstreamMesh,
+            ImmutableArray<string> shapes,
+            bool hasVisiblePrimitives)
+        {
+            if (renderer == null) return;
+            _visibilityCache[renderer] = new VisibilityCacheEntry(
+                upstreamMesh,
+                shapes,
+                hasVisiblePrimitives);
+        }
+
+        private void ClearVisibility(SkinnedMeshRenderer renderer)
+        {
+            if (renderer != null) _visibilityCache.Remove(renderer);
+        }
+
+        private void RecordMeshBuilt()
+        {
+            MeshBuildCountForTests++;
+        }
+
+        private void RecordMeshDestroyed()
+        {
+            MeshDestroyCountForTests++;
+        }
+
+        private static Mesh CreateFilteredMesh(
+            Mesh source,
+            ImmutableArray<string> shapes,
+            float threshold,
+            out bool hasVisiblePrimitives)
+        {
+            if (source == null) throw new ArgumentNullException(nameof(source));
+            var selectedVertices = BuildSelectedVertexMask(source, shapes, threshold);
+            var clone = UnityEngine.Object.Instantiate(source);
+            clone.name = source.name + " (Setup Outfit Delete Preview)";
+            clone.hideFlags = HideFlags.HideAndDontSave;
+            hasVisiblePrimitives = false;
+            try
+            {
+                for (var subMesh = 0; subMesh < source.subMeshCount; subMesh++)
+                {
+                    var topology = source.GetTopology(subMesh);
+                    var indices = source.GetIndices(subMesh, true);
+                    var retained = BuildRetainedIndices(
+                        indices,
+                        topology,
+                        selectedVertices,
+                        out var subMeshHasVisiblePrimitives);
+                    hasVisiblePrimitives |= subMeshHasVisiblePrimitives;
+                    if (retained.Count == 0 && source.vertexCount > 0)
+                    {
+                        var primitiveSize = GetPrimitiveSize(topology);
+                        var placeholderIndex = indices.Length > 0 ? indices[0] : 0;
+                        for (var index = 0; index < primitiveSize; index++)
+                            retained.Add(placeholderIndex);
+                    }
+
+                    SetRetainedIndices(clone, retained, topology, subMesh);
+                }
+
+                clone.bounds = source.bounds;
+                return clone;
+            }
+            catch
+            {
+                UnityEngine.Object.DestroyImmediate(clone);
+                throw;
+            }
+        }
+
+        private static void SetRetainedIndices(
+            Mesh mesh,
+            IReadOnlyList<int> retained,
+            MeshTopology topology,
+            int subMesh)
+        {
+            if (retained.Count == 0)
+            {
+                mesh.SetIndices(Array.Empty<int>(), topology, subMesh, false, 0);
+                return;
+            }
+
+            if (mesh.indexFormat != IndexFormat.UInt16)
+            {
+                mesh.SetIndices(retained.ToArray(), topology, subMesh, false, 0);
+                return;
+            }
+
+            var baseVertex = Math.Max(0, retained.Min());
+            var relative = new List<ushort>(retained.Count);
+            foreach (var absoluteIndex in retained)
+            {
+                var adjusted = absoluteIndex - baseVertex;
+                if (adjusted < 0 || adjusted > ushort.MaxValue)
+                {
+                    throw new InvalidOperationException(
+                        "UInt16 Index BufferのbaseVertexを保持できません。");
+                }
+
+                relative.Add((ushort)adjusted);
+            }
+
+            mesh.SetIndices(
+                relative,
+                0,
+                relative.Count,
+                topology,
+                subMesh,
+                false,
+                baseVertex);
+        }
+
+        private static bool HasRetainedPrimitives(
+            Mesh source,
+            ImmutableArray<string> shapes,
+            float threshold)
+        {
+            var selectedVertices = BuildSelectedVertexMask(source, shapes, threshold);
+            for (var subMesh = 0; subMesh < source.subMeshCount; subMesh++)
+            {
+                BuildRetainedIndices(
+                    source.GetIndices(subMesh, true),
+                    source.GetTopology(subMesh),
+                    selectedVertices,
+                    out var hasVisiblePrimitives);
+                if (hasVisiblePrimitives) return true;
+            }
+
+            return false;
+        }
+
+        private static bool[] BuildSelectedVertexMask(
+            Mesh mesh,
+            IEnumerable<string> shapes,
+            float threshold)
+        {
+            var selected = new bool[mesh.vertexCount];
+            var deltaPositions = new Vector3[mesh.vertexCount];
+            var squaredThreshold = threshold * threshold;
+            foreach (var shapeName in shapes.Distinct(StringComparer.Ordinal))
+            {
+                var shapeIndex = mesh.GetBlendShapeIndex(shapeName);
+                if (shapeIndex < 0) continue;
+                for (var frame = 0; frame < mesh.GetBlendShapeFrameCount(shapeIndex); frame++)
+                {
+                    mesh.GetBlendShapeFrameVertices(
+                        shapeIndex,
+                        frame,
+                        deltaPositions,
+                        null,
+                        null);
+                    for (var vertex = 0; vertex < deltaPositions.Length; vertex++)
+                    {
+                        if (deltaPositions[vertex].sqrMagnitude > squaredThreshold)
+                            selected[vertex] = true;
+                    }
+                }
+            }
+
+            return selected;
+        }
+
+        private static List<int> BuildRetainedIndices(
+            IReadOnlyList<int> indices,
+            MeshTopology topology,
+            IReadOnlyList<bool> selectedVertices,
+            out bool hasVisiblePrimitives)
+        {
+            var primitiveSize = GetPrimitiveSize(topology);
+            var retained = new List<int>(indices.Count);
+            hasVisiblePrimitives = false;
+            for (var offset = 0; offset + primitiveSize <= indices.Count; offset += primitiveSize)
+            {
+                var deleted = false;
+                for (var index = 0; index < primitiveSize; index++)
+                {
+                    var vertex = indices[offset + index];
+                    if (vertex >= 0
+                        && vertex < selectedVertices.Count
+                        && selectedVertices[vertex])
+                    {
+                        deleted = true;
+                        break;
+                    }
+                }
+
+                if (deleted) continue;
+                hasVisiblePrimitives |= IsRenderablePrimitive(
+                    indices, offset, primitiveSize, topology);
+                for (var index = 0; index < primitiveSize; index++)
+                    retained.Add(indices[offset + index]);
+            }
+
+            return retained;
+        }
+
+        private static bool IsRenderablePrimitive(
+            IReadOnlyList<int> indices,
+            int offset,
+            int primitiveSize,
+            MeshTopology topology)
+        {
+            if (topology != MeshTopology.Triangles
+                && topology != MeshTopology.Quads)
+            {
+                return true;
+            }
+
+            if (primitiveSize < 3) return false;
+            var first = indices[offset];
+            var second = -1;
+            for (var index = 1; index < primitiveSize; index++)
+            {
+                var vertex = indices[offset + index];
+                if (vertex == first) continue;
+                if (second < 0)
+                {
+                    second = vertex;
+                    continue;
+                }
+
+                if (vertex != second) return true;
+            }
+
+
+            return false;
+        }
+        private static int GetPrimitiveSize(MeshTopology topology)
+        {
+            return topology switch
+            {
+                MeshTopology.Triangles => 3,
+                MeshTopology.Quads => 4,
+                _ => 1,
+            };
+        }
+
+        private readonly struct VisibilityCacheEntry
+        {
+            internal VisibilityCacheEntry(
+                Mesh mesh,
+                ImmutableArray<string> shapes,
+                bool hasVisiblePrimitives)
+            {
+                Mesh = mesh;
+                Shapes = shapes;
+                HasVisiblePrimitives = hasVisiblePrimitives;
+            }
+
+            internal Mesh Mesh { get; }
+            internal ImmutableArray<string> Shapes { get; }
+            internal bool HasVisiblePrimitives { get; }
+        }
+
+        private sealed class Node : IRenderFilterNode
+        {
+            private readonly OutfitShapeDeletePreviewFilter _owner;
+            private readonly PublishedValue<OutfitShapeDeletePreviewState> _state;
+            private readonly SkinnedMeshRenderer _original;
+            private ImmutableArray<string> _lastShapes = ImmutableArray<string>.Empty;
+            private Mesh _upstreamMesh;
+            private Mesh _generatedMesh;
+
+            internal Node(
+                OutfitShapeDeletePreviewFilter owner,
+                PublishedValue<OutfitShapeDeletePreviewState> state,
+                SkinnedMeshRenderer original)
+            {
+                _owner = owner;
+                _state = state;
+                _original = original;
+            }
+
+            public RenderAspects WhatChanged => RenderAspects.Mesh;
+
+            public void OnFrame(Renderer original, Renderer proxy)
+            {
+                if (_original == null
+                    || proxy is not SkinnedMeshRenderer proxySmr
+                    || proxySmr.sharedMesh == null)
+                {
+                    DisposeGeneratedMesh();
+                    _owner.ClearVisibility(_original);
+                    return;
+                }
+
+                var upstreamMesh = proxySmr.sharedMesh == _generatedMesh
+                    ? _upstreamMesh
+                    : proxySmr.sharedMesh;
+                var state = _state.Value;
+                var shapes = state.ActiveShapes.TryGetValue(_original, out var activeShapes)
+                    ? activeShapes
+                    : ImmutableArray<string>.Empty;
+                if (shapes.Length == 0)
+                {
+                    var visibilityChanged = _upstreamMesh != upstreamMesh
+                                            || !_lastShapes.SequenceEqual(shapes);
+                    DisposeGeneratedMesh();
+                    _upstreamMesh = upstreamMesh;
+                    _lastShapes = shapes;
+                    if (visibilityChanged)
+                    {
+                        _owner.RecordVisibility(
+                            _original,
+                            upstreamMesh,
+                            shapes,
+                            HasRetainedPrimitives(upstreamMesh, shapes, Threshold));
+                    }
+
+                    proxySmr.sharedMesh = upstreamMesh;
+                    return;
+                }
+
+                if (_generatedMesh == null
+                    || _upstreamMesh != upstreamMesh
+                    || !_lastShapes.SequenceEqual(shapes))
+                {
+                    DisposeGeneratedMesh();
+                    _generatedMesh = CreateFilteredMesh(
+                        upstreamMesh,
+                        shapes,
+                        Threshold,
+                        out var hasVisiblePrimitives);
+                    _owner.RecordMeshBuilt();
+                    _owner.RecordVisibility(
+                        _original,
+                        upstreamMesh,
+                        shapes,
+                        hasVisiblePrimitives);
+                    _upstreamMesh = upstreamMesh;
+                    _lastShapes = shapes;
+                }
+
+                proxySmr.sharedMesh = _generatedMesh;
+            }
+
+            public Task<IRenderFilterNode> Refresh(
+                IEnumerable<(Renderer, Renderer)> proxyPairs,
+                ComputeContext context,
+                RenderAspects updatedAspects)
+            {
+                return (updatedAspects & RenderAspects.Mesh) != 0
+                    ? Task.FromResult<IRenderFilterNode>(null)
+                    : Task.FromResult<IRenderFilterNode>(this);
+            }
+
+            public void Dispose()
+            {
+                DisposeGeneratedMesh();
+                _owner.ClearVisibility(_original);
+            }
+
+            private void DisposeGeneratedMesh()
+            {
+                if (_generatedMesh == null) return;
+                UnityEngine.Object.DestroyImmediate(_generatedMesh);
+                _generatedMesh = null;
+                _owner.RecordMeshDestroyed();
             }
         }
     }

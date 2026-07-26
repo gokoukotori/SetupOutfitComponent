@@ -23,10 +23,12 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
         private OutfitVisibilityPreviewFilter _sceneVisibilityFilter;
         private OutfitPartVisibilityPreviewFilter _partFilter;
         private OutfitShapeChangerPreviewFilter _shapeChangerFilter;
+        private OutfitShapeDeletePreviewFilter _shapeDeleteFilter;
         private PreviewSession _previewSession;
         private IDisposable _sceneVisibilityFilterRegistration;
         private IDisposable _partFilterRegistration;
         private IDisposable _shapeChangerFilterRegistration;
+        private IDisposable _shapeDeleteFilterRegistration;
         private TargetAvatarVisibility _targetAvatarVisibility;
         private readonly Dictionary<string, PartToggleTargetPlan> _highlightTargets =
             new Dictionary<string, PartToggleTargetPlan>(StringComparer.Ordinal);
@@ -48,6 +50,8 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             new SequencePoint { DebugString = "Setup Outfit Component Part Preview" };
         private static readonly SequencePoint ShapeChangerPreviewSequencePoint =
             new SequencePoint { DebugString = "Setup Outfit Component Shape Changer Preview" };
+        private static readonly SequencePoint ShapeDeletePreviewSequencePoint =
+            new SequencePoint { DebugString = "Setup Outfit Component Shape Delete Preview" };
 
         internal static OutfitApplyPreviewWindow ActiveWindowForTests => _activeWindow;
         internal int RebuildCountForTests => _rebuildCount;
@@ -58,6 +62,8 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
         internal OutfitPartVisibilityPreviewFilter PartFilterForTests => _partFilter;
         internal OutfitShapeChangerPreviewFilter ShapeChangerFilterForTests =>
             _shapeChangerFilter;
+        internal OutfitShapeDeletePreviewFilter ShapeDeleteFilterForTests =>
+            _shapeDeleteFilter;
         internal OutfitPreviewHighlightCache HighlightCacheForTests => _highlightCache;
         internal IReadOnlyList<Renderer> HighlightedVisibleRenderersForTests =>
             GetHighlightedVisibleRenderers();
@@ -232,9 +238,14 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                 var existingSummary = _request.ExistingAvatarShapeChangerSetCount > 0
                     ? $"既存アバターShape Changer Set {_request.ExistingAvatarShapeChangerSetCount}件を反映中。"
                     : string.Empty;
+                var plannedDeleteSummary = _request.ShapeChanges.Any(change =>
+                    change.ChangeType == nadena.dev.modular_avatar.core.ShapeChangeType.Delete)
+                    ? "新規DeleteはProxy Meshのポリゴン除外として反映中。"
+                    : string.Empty;
                 EditorGUILayout.HelpBox(
                     existingSummary
-                    + "新規Setと既存SetをHierarchy順で累積プレビューします。既存MA Menu Itemは初期状態のみです。MA装着処理、Deleteの一時追従、BlendShape Syncへの伝播、Animator、Reaction Debugger、最終NDMF競合は反映しません。",
+                    + plannedDeleteSummary
+                    + "新規Set/Deleteと既存SetをHierarchy順で累積プレビューします。既存MA Menu Itemは初期状態のみです。MA装着処理、最終NaNimation、既存Deleteの一時追従、BlendShape Syncへの伝播、Animator、Reaction Debugger、最終NDMF競合は反映しません。",
                     MessageType.Info);
             }
             else
@@ -303,6 +314,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                 && _sceneVisibilityFilter != null
                 && _partFilter != null
                 && _shapeChangerFilter != null
+                && _shapeDeleteFilter != null
                 && _request.IsMirrorStructureEquivalentTo(request))
             {
                 try
@@ -539,13 +551,23 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
         private bool IsHighlightBindingVisible(OutfitPreviewHighlightBinding binding)
         {
             if (binding.Source == PartTargetSource.OutfitPrefab)
-                return _partFilter.IsRendererVisible(binding.Renderer);
+            {
+                return _partFilter.IsRendererVisible(binding.Renderer)
+                       && (_shapeDeleteFilter == null
+                           || _shapeDeleteFilter.HasVisiblePrimitives(binding.Renderer));
+            }
             if (_sceneVisibilityFilter.ControlsRenderer(binding.Renderer))
-                return _sceneVisibilityFilter.IsRendererVisible(binding.Renderer);
-            return !_previewOn
-                   && binding.Renderer != null
-                   && binding.Renderer.enabled
-                   && binding.Renderer.gameObject.activeInHierarchy;
+            {
+                return _sceneVisibilityFilter.IsRendererVisible(binding.Renderer)
+                       && (_shapeDeleteFilter == null
+                           || _shapeDeleteFilter.HasVisiblePrimitives(binding.Renderer));
+            }
+            var visible = !_previewOn
+                          && binding.Renderer != null
+                          && binding.Renderer.enabled
+                          && binding.Renderer.gameObject.activeInHierarchy;
+            return visible && (_shapeDeleteFilter == null
+                               || _shapeDeleteFilter.HasVisiblePrimitives(binding.Renderer));
         }
 
         private void DrawHighlightedTargets()
@@ -666,6 +688,10 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
 
         private void RebuildShapeChangerFilter()
         {
+            _shapeDeleteFilterRegistration?.Dispose();
+            _shapeDeleteFilterRegistration = null;
+            _shapeDeleteFilter = null;
+
             _shapeChangerFilterRegistration?.Dispose();
             _shapeChangerFilterRegistration = null;
             _shapeChangerFilter = null;
@@ -686,6 +712,10 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             _shapeChangerFilterRegistration = _previewSession.AddMutator(
                 ShapeChangerPreviewSequencePoint,
                 _shapeChangerFilter);
+            _shapeDeleteFilter = _shapeChangerFilter.CreateDeletePreviewFilter();
+            _shapeDeleteFilterRegistration = _previewSession.AddMutator(
+                ShapeDeletePreviewSequencePoint,
+                _shapeDeleteFilter);
         }
 
         private static bool HaveEquivalentPartRules(
@@ -774,6 +804,10 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
 
         private void DisposePreviewResources()
         {
+            _shapeDeleteFilterRegistration?.Dispose();
+            _shapeDeleteFilterRegistration = null;
+            _shapeDeleteFilter = null;
+
             _shapeChangerFilterRegistration?.Dispose();
             _shapeChangerFilterRegistration = null;
             _shapeChangerFilter = null;

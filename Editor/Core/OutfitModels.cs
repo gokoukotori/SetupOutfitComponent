@@ -258,7 +258,8 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             SceneObjectReference sceneRendererReference,
             string shapeName,
             float value,
-            bool inverted)
+            bool inverted,
+            ShapeChangeType changeType)
         {
             Source = source;
             PrefabRendererKey = prefabRendererKey;
@@ -266,6 +267,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             ShapeName = shapeName ?? string.Empty;
             Value = value;
             Inverted = inverted;
+            ChangeType = changeType;
         }
 
         internal PartTargetSource Source { get; set; }
@@ -274,6 +276,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
         internal string ShapeName { get; set; }
         internal float Value { get; set; }
         internal bool Inverted { get; set; }
+        internal ShapeChangeType ChangeType { get; set; }
         internal string StableRendererId => Source == PartTargetSource.OutfitPrefab
             ? "P:" + PrefabRendererKey
             : "S:" + (SceneRendererReference?.GlobalObjectId ?? string.Empty);
@@ -282,7 +285,8 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             PrefabTargetKey prefabRendererKey,
             string shapeName,
             float value = 100f,
-            bool inverted = false)
+            bool inverted = false,
+            ShapeChangeType changeType = ShapeChangeType.Set)
         {
             return new ShapeChangerSettingPlan(
                 PartTargetSource.OutfitPrefab,
@@ -290,14 +294,16 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                 null,
                 shapeName,
                 value,
-                inverted);
+                inverted,
+                changeType);
         }
 
         internal static ShapeChangerSettingPlan ForScene(
             SceneObjectReference sceneRendererReference,
             string shapeName,
             float value = 100f,
-            bool inverted = false)
+            bool inverted = false,
+            ShapeChangeType changeType = ShapeChangeType.Set)
         {
             return new ShapeChangerSettingPlan(
                 PartTargetSource.SceneObject,
@@ -305,7 +311,8 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                 sceneRendererReference ?? throw new ArgumentNullException(nameof(sceneRendererReference)),
                 shapeName,
                 value,
-                inverted);
+                inverted,
+                changeType);
         }
     }
 

@@ -2,6 +2,16 @@
 
 このパッケージの主な変更を記録します。
 
+## [0.2.8] - 2026-07-26
+
+- ステップ6の各Shape設定で`Set`／`Delete`を選択できるようにし、Deleteは`Value=100`、`Threshold=0.01`へ固定しました。
+- Deleteは全BlendShapeフレームの差分を評価し、Thresholdを超える頂点を1つでも含むPrimitiveを削除します。複数Shapeは削除対象の和集合として扱います。
+- SetとDeleteを同一コンポーネントへ混在させつつ、条件反転の違いは従来どおり最大2個のMA Shape Changerへ分割生成します。
+- Hierarchyで最後に有効な設定を優先し、後段Setによる先行Deleteの解除と、後段DeleteによるPrimitive削除へ対応しました。
+- 専用NDMF SceneViewへ生成予定Deleteの視覚結果を反映し、必要なProxy Meshだけを生成・更新・破棄するようにしました。NaNimation、Animator、既存Deleteの一時状態追従は対象外です。
+- DeleteはBlendShape Syncへ伝播させず、既存Deleteとの競合は警告として生成を許可します。
+- 元Prefab、Scene、Transform、BlendShape Weight、公開API、Runtime assembly、Unity／VRChat SDK／Modular Avatar／NDMFの依存条件を変更しない既存契約を維持しました。
+
 ## [0.2.7] - 2026-07-26
 
 - ステップ6の各Shape設定へ`条件を反転`を追加し、シェイプ単位でMA Shape Changerの適用条件を反転できるようにしました。
