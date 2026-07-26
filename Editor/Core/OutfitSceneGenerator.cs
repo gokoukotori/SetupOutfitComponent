@@ -330,7 +330,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             var result = new List<ShapeChangerComponentBinding>();
             if (plan.MasterShapeChanges.Count > 0)
             {
-                result.Add(CreateShapeChangerComponent(
+                result.AddRange(CreateShapeChangerComponentsForOwner(
                     masterOwner,
                     plan.MasterShapeChanges,
                     outfitInstance,
@@ -346,7 +346,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                         $"個別項目「{part.Label}」のShape Changer生成先を解決できません。");
                 }
 
-                result.Add(CreateShapeChangerComponent(
+                result.AddRange(CreateShapeChangerComponentsForOwner(
                     owner,
                     part.ShapeChanges,
                     outfitInstance,
@@ -377,7 +377,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                         "同じ衣装Renderer GameObjectへ複数のShape Changer owner設定があります。");
                 }
 
-                result.Add(CreateShapeChangerComponent(
+                result.AddRange(CreateShapeChangerComponentsForOwner(
                     owner,
                     rendererOwner.ShapeChanges,
                     outfitInstance,
@@ -388,12 +388,51 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             return result;
         }
 
+        private static IReadOnlyList<ShapeChangerComponentBinding>
+            CreateShapeChangerComponentsForOwner(
+                GameObject owner,
+                IReadOnlyList<ShapeChangerSettingPlan> settings,
+                GameObject outfitInstance,
+                string dependencyHash,
+                bool requiresAddedComponentOverride = false)
+        {
+            if (owner == null || settings == null || settings.Count == 0)
+            {
+                throw new OutfitGenerationException("Shape Changerの生成先または設定がありません。");
+            }
+
+            if (settings.Any(setting => setting == null))
+            {
+                throw new OutfitGenerationException("Shape Changer設定を解決できません。");
+            }
+
+            var result = new List<ShapeChangerComponentBinding>(2);
+            foreach (var inverted in new[] { false, true })
+            {
+                var groupedSettings = settings
+                    .Where(setting => setting.Inverted == inverted)
+                    .ToArray();
+                if (groupedSettings.Length == 0) continue;
+
+                result.Add(CreateShapeChangerComponent(
+                    owner,
+                    groupedSettings,
+                    outfitInstance,
+                    dependencyHash,
+                    inverted,
+                    requiresAddedComponentOverride));
+            }
+
+            return result;
+        }
+
         private static ShapeChangerComponentBinding CreateShapeChangerComponent(
             GameObject owner,
             IReadOnlyList<ShapeChangerSettingPlan> settings,
             GameObject outfitInstance,
             string dependencyHash,
-            bool requiresAddedComponentOverride = false)
+            bool inverted,
+            bool requiresAddedComponentOverride)
         {
             if (owner == null || settings == null || settings.Count == 0)
             {
@@ -434,7 +473,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
 
             var component = Undo.AddComponent<ModularAvatarShapeChanger>(owner);
             Undo.RecordObject(component, UndoName);
-            component.Inverted = false;
+            component.Inverted = inverted;
             component.Threshold = ShapeChangerThreshold;
             component.Shapes = resolvedShapes.Select(resolved =>
             {
@@ -458,6 +497,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                 component,
                 owner,
                 resolvedShapes,
+                inverted,
                 requiresAddedComponentOverride);
         }
 
@@ -728,7 +768,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                     "衣装Rendererへ追加したMA Shape ChangerがAdded Component Overrideとして保持されていません。");
             }
 
-            if (component.Inverted
+            if (component.Inverted != generated.Inverted
                 || !Mathf.Approximately(component.Threshold, ShapeChangerThreshold))
             {
                 throw new OutfitGenerationException("生成したMA Shape Changerの固定設定が一致しません。");
@@ -952,17 +992,20 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                 ModularAvatarShapeChanger component,
                 GameObject owner,
                 ResolvedShapeChange[] shapes,
+                bool inverted,
                 bool requiresAddedComponentOverride)
             {
                 Component = component;
                 Owner = owner;
                 Shapes = shapes;
+                Inverted = inverted;
                 RequiresAddedComponentOverride = requiresAddedComponentOverride;
             }
 
             internal ModularAvatarShapeChanger Component { get; }
             internal GameObject Owner { get; }
             internal ResolvedShapeChange[] Shapes { get; }
+            internal bool Inverted { get; }
             internal bool RequiresAddedComponentOverride { get; }
         }
 

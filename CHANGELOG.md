@@ -2,6 +2,15 @@
 
 このパッケージの主な変更を記録します。
 
+## [0.2.7] - 2026-07-26
+
+- ステップ6の各Shape設定へ`条件を反転`を追加し、シェイプ単位でMA Shape Changerの適用条件を反転できるようにしました。
+- 同じ制御元で通常と反転の設定が混在する場合、設定順を維持して`Inverted=false`、`Inverted=true`の最大2コンポーネントへ分割生成するようにしました。
+- 条件反転を所有GameObjectのactive階層とメニュー条件の評価後に適用し、衣装全体OFF、個別項目OFF、祖先非アクティブを専用プレビューへ反映しました。
+- 反転切り替えではShape Filterのルールだけを更新し、Render Mirror、Scene Filter、Renderer集合、NDMF Nodeを再構築しない動作を維持しました。
+- 同一制御元内の同一Renderer＋Shape重複、未指定行の生成拒否、元Scene／Prefab／Transformを変更しない既存契約を維持しました。
+- 公開API、Runtime assembly、生成Hierarchy、Unity／VRChat SDK／Modular Avatar／NDMFの依存条件は変更していません。
+
 ## [0.2.6] - 2026-07-25
 
 - 選択アバターに既に追加されているMA Shape Changerの`Set`を、専用NDMF SceneViewの累積プレビューへ常時反映するようにしました。

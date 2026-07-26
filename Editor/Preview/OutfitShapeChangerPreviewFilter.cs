@@ -267,7 +267,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                         change.OutfitOwnerKey,
                         null,
                         false,
-                        false,
+                        change.Inverted,
                         false,
                         true,
                         order,
@@ -606,20 +606,29 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                     return active ^ control.Inverted;
                 }
 
-                if (!state.PreviewOn) return false;
-                if (control.IsMaster) return true;
-                if (control.HasOutfitOwner)
+                bool plannedActive;
+                if (control.IsMaster)
                 {
-                    return state.PrefabActiveResolver.IsActive(
-                        control.OutfitOwnerKey,
-                        true,
-                        state.PartStates);
+                    plannedActive = state.PreviewOn;
+                }
+                else if (control.HasOutfitOwner)
+                {
+                    plannedActive = state.PreviewOn
+                             && state.PrefabActiveResolver.IsActive(
+                                 control.OutfitOwnerKey,
+                                 true,
+                                 state.PartStates);
+                }
+                else
+                {
+                    plannedActive = state.PreviewOn
+                             && state.PartStates.TryGetValue(
+                                 control.OwnerItemId,
+                                 out var partOn)
+                             && partOn;
                 }
 
-                return state.PartStates.TryGetValue(
-                           control.OwnerItemId,
-                           out var partOn)
-                       && partOn;
+                return plannedActive ^ control.Inverted;
             }
 
             public void Dispose()

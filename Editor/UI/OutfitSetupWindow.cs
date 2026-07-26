@@ -1077,8 +1077,11 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
         {
             EditorGUILayout.LabelField("MA Shape Changer Set", EditorStyles.boldLabel);
             EditorGUILayout.HelpBox(
-                "衣装全体ON、衣装Renderer GameObjectの表示状態、または個別メニュー項目のON状態に連動して、アバター側／衣装側のBlendShapeを0～100の値へ設定します。Delete、Threshold編集、Inverted編集には対応しません。",
+                "衣装全体ON、衣装Renderer GameObjectの表示状態、または個別メニュー項目のON状態に連動して、アバター側／衣装側のBlendShapeを0～100の値へ設定します。DeleteとThreshold編集には対応しません。",
                 MessageType.Info);
+            EditorGUILayout.HelpBox(
+                "「条件を反転」はBlendShape値ではなく、所有GameObjectのactive階層とメニュー条件をすべて評価した後の適用条件を反転します。衣装全体OFFや祖先非アクティブ時にもSetが有効になる場合があります。",
+                MessageType.None);
 
             using (new EditorGUI.DisabledScope(!CanAttemptApplyPreview()))
             {
@@ -1479,6 +1482,14 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                     setting.Value = nextValue;
                     ShapeChangerPlanChanged();
                 }
+                EditorGUI.BeginChangeCheck();
+                var nextInverted = EditorGUILayout.Toggle("条件を反転", setting.Inverted);
+                if (EditorGUI.EndChangeCheck())
+                {
+                    setting.Inverted = nextInverted;
+                    ShapeChangerPlanChanged();
+                }
+
 
                 if (string.IsNullOrWhiteSpace(setting.ShapeName))
                     EditorGUILayout.HelpBox("BlendShapeを選択してください。", MessageType.Warning);
@@ -1680,7 +1691,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
 
             EditorGUILayout.Space(8f);
             EditorGUILayout.LabelField("Shape Changer Set", EditorStyles.boldLabel);
-            EditorGUILayout.LabelField("生成設定", "Set / Inverted=false / Threshold=0.01");
+            EditorGUILayout.LabelField("生成設定", "Set / ShapeごとにInverted / Threshold=0.01");
             EditorGUILayout.LabelField(
                 "競合解決",
                 "全体 → 衣装Renderer付与先（Prefab Hierarchy順） → 個別項目（メニュー順）");
@@ -1771,7 +1782,8 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                     "  [" + GetShapeChangerTargetSourceLabel(setting) + "] "
                     + GetShapeChangerRendererDisplayName(setting)
                     + " / " + EmptyFallback(setting.ShapeName, "<Shape未指定>"),
-                    "Set " + setting.Value.ToString("0.###"));
+                    "Set " + setting.Value.ToString("0.###")
+                    + (setting.Inverted ? " / 条件反転あり" : " / 条件反転なし"));
             }
         }
 

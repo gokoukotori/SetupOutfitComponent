@@ -257,13 +257,15 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             PrefabTargetKey prefabRendererKey,
             SceneObjectReference sceneRendererReference,
             string shapeName,
-            float value)
+            float value,
+            bool inverted)
         {
             Source = source;
             PrefabRendererKey = prefabRendererKey;
             SceneRendererReference = sceneRendererReference;
             ShapeName = shapeName ?? string.Empty;
             Value = value;
+            Inverted = inverted;
         }
 
         internal PartTargetSource Source { get; set; }
@@ -271,6 +273,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
         internal SceneObjectReference SceneRendererReference { get; set; }
         internal string ShapeName { get; set; }
         internal float Value { get; set; }
+        internal bool Inverted { get; set; }
         internal string StableRendererId => Source == PartTargetSource.OutfitPrefab
             ? "P:" + PrefabRendererKey
             : "S:" + (SceneRendererReference?.GlobalObjectId ?? string.Empty);
@@ -278,27 +281,31 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
         internal static ShapeChangerSettingPlan ForPrefab(
             PrefabTargetKey prefabRendererKey,
             string shapeName,
-            float value = 100f)
+            float value = 100f,
+            bool inverted = false)
         {
             return new ShapeChangerSettingPlan(
                 PartTargetSource.OutfitPrefab,
                 prefabRendererKey,
                 null,
                 shapeName,
-                value);
+                value,
+                inverted);
         }
 
         internal static ShapeChangerSettingPlan ForScene(
             SceneObjectReference sceneRendererReference,
             string shapeName,
-            float value = 100f)
+            float value = 100f,
+            bool inverted = false)
         {
             return new ShapeChangerSettingPlan(
                 PartTargetSource.SceneObject,
                 default,
                 sceneRendererReference ?? throw new ArgumentNullException(nameof(sceneRendererReference)),
                 shapeName,
-                value);
+                value,
+                inverted);
         }
     }
 

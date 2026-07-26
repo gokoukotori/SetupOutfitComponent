@@ -212,7 +212,8 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             SkinnedMeshRenderer sceneRenderer,
             string stableRendererId,
             string shapeName,
-            float value)
+            float value,
+            bool inverted = false)
             : this(
                 ownerItemId,
                 isMaster,
@@ -224,7 +225,8 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                 sceneRenderer,
                 stableRendererId,
                 shapeName,
-                value)
+                value,
+                inverted)
         {
         }
 
@@ -239,7 +241,8 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             SkinnedMeshRenderer sceneRenderer,
             string stableRendererId,
             string shapeName,
-            float value)
+            float value,
+            bool inverted = false)
         {
             OwnerItemId = ownerItemId ?? string.Empty;
             IsMaster = isMaster;
@@ -252,6 +255,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
             StableRendererId = stableRendererId ?? string.Empty;
             ShapeName = shapeName ?? string.Empty;
             Value = value;
+            Inverted = inverted;
         }
 
         internal string OwnerItemId { get; }
@@ -265,6 +269,7 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
         internal string StableRendererId { get; }
         internal string ShapeName { get; }
         internal float Value { get; }
+        internal bool Inverted { get; }
 
         public bool Equals(OutfitShapeChangePreviewSnapshot other)
         {
@@ -281,7 +286,8 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                        other.StableRendererId,
                        StringComparison.Ordinal)
                    && string.Equals(ShapeName, other.ShapeName, StringComparison.Ordinal)
-                   && Value.Equals(other.Value);
+                   && Value.Equals(other.Value)
+                   && Inverted == other.Inverted;
         }
 
         public override bool Equals(object obj)
@@ -306,7 +312,8 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                            ^ StringComparer.Ordinal.GetHashCode(StableRendererId);
                 hashCode = (hashCode * 397)
                            ^ StringComparer.Ordinal.GetHashCode(ShapeName);
-                return (hashCode * 397) ^ Value.GetHashCode();
+                hashCode = (hashCode * 397) ^ Value.GetHashCode();
+                return (hashCode * 397) ^ Inverted.GetHashCode();
             }
         }
     }
@@ -1002,7 +1009,8 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                     change.Source == PartTargetSource.SceneObject ? renderer : null,
                     change.StableRendererId,
                     change.ShapeName,
-                    change.Value));
+                    change.Value,
+                    change.Inverted));
             }
 
             if (skippedCount > 0)

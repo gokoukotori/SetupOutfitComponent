@@ -691,12 +691,14 @@ namespace Gokoukotori.SetupOutfitComponent.Editor
                 }
 
                 if (ownerObject != null
+                    && rendererOwner.ShapeChanges.Any(setting =>
+                        setting != null && !setting.Inverted)
                     && HasUncoveredInactiveOwnerHierarchy(plan, ownerObject, plan.SourcePrefab))
                 {
                     AddWarning(messages, "SHAPE_CHANGER_RENDERER_OWNER_INACTIVE",
-                        "Shape Changer ownerまたは祖先は入力Prefabで非アクティブですが、"
+                        "Shape Changer ownerまたは祖先は入力Prefabで非アクティブですが、反転なしのSetに対して"
                         + "ステップ4にON時表示するowner／祖先ターゲットがありません。"
-                        + "外部MAまたはAnimatorで有効化されない限りSetは適用されません。");
+                        + "外部MAまたはAnimatorで有効化されない限り反転なしのSetは適用されません。");
                 }
 
                 if (ownerObject != null
