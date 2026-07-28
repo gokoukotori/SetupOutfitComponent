@@ -13,13 +13,15 @@
 
 ## 導入
 
-このパッケージは埋め込みUPMパッケージです。Unityプロジェクトの次の場所へ配置し、必要環境に記載した依存パッケージを導入してください。
+[配布用VPMリポジトリ](https://vpm.gokoukotori.com/)を開き、「Add to VCC」を押してリポジトリを追加してください。
+
+ボタンを利用できない場合は、VCCの`Settings` → `Packages` → `Add Repository`に次のURLを入力します。
 
 ```text
-Packages/com.gokoukotori.setup-outfit-component
+https://vpm.gokoukotori.com/index.json
 ```
 
-配布用VPMリポジトリやGit URLからの導入は、バージョン0.2.8では提供していません。
+リポジトリ追加後、VCCで対象プロジェクトの管理画面を開き、`Setup Outfit Component`を追加してください。
 
 ## 使い方
 
